@@ -1,0 +1,10 @@
+name: pocketbase-fork
+metadata:
+  template: pocketbase-fork@0.0.1
+services:
+  pocketbase:
+    host: containerapp
+    language: go
+    project: .
+    docker:
+      path: ./Dockerfile
