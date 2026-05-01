@@ -21,7 +21,7 @@ FROM alpine:3 AS litestream
 ARG LITESTREAM_VERSION=0.3.13
 ARG TARGETARCH
 
-RUN wget -q "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH:-amd64}-static.tar.gz" \
+RUN wget -q "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz" \
     -O /tmp/litestream.tar.gz \
     && tar -xzf /tmp/litestream.tar.gz -C /usr/local/bin \
     && chmod +x /usr/local/bin/litestream
