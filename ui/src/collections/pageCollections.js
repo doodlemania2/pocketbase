@@ -5,9 +5,10 @@ const FILTER_QUERY_KEY = "filter";
 const COLLECTION_QUERY_KEY = "collection";
 const RECORD_QUERY_KEY = "record";
 const LAST_ACTIVE_STORAGE_KEY = "pbLastActiveCollection";
-const TOTAL_COUNT_REQUEST_KEY = "recordsTotalCountRequest";
 
 export function pageCollections(route) {
+    const uniqueId = "page_collections_" + app.utils.randomString();
+
     app.store.activeCollection = route.query[COLLECTION_QUERY_KEY]?.[0]
         || window.localStorage.getItem(LAST_ACTIVE_STORAGE_KEY);
 
@@ -34,7 +35,8 @@ export function pageCollections(route) {
             );
 
             const result = await app.pb.collection(app.store.activeCollection.name).getList(1, 1, {
-                requestKey: TOTAL_COUNT_REQUEST_KEY,
+                // use a per page unique id and not a global constant to prevent race issues with the async unmount
+                requestKey: uniqueId,
                 filter: normalizedFilter,
                 fields: "id",
             });
@@ -60,13 +62,10 @@ export function pageCollections(route) {
             (newVal, oldVal) => {
                 app.store.title = app.store.activeCollection?.name || "Collections";
 
-                // skip unnecessery initial params replacement
-                if (!oldVal) {
-                    return;
-                }
+                const hasChanged = oldVal && oldVal != newVal;
 
                 // reset filter and sort params on collection change
-                if (oldVal != newVal) {
+                if (hasChanged) {
                     pageData.filter = "";
                     pageData.sort = "";
                 }
@@ -75,7 +74,7 @@ export function pageCollections(route) {
                     [COLLECTION_QUERY_KEY]: app.store.activeCollection?.name,
                     [FILTER_QUERY_KEY]: pageData.filter || null,
                     [SORT_QUERY_KEY]: pageData.sort || null,
-                }, newVal != oldVal ? true : null);
+                }, hasChanged ? true : null);
 
                 if (app.store.activeCollection?.id) {
                     window.localStorage.setItem(LAST_ACTIVE_STORAGE_KEY, app.store.activeCollection.id);
@@ -184,7 +183,7 @@ export function pageCollections(route) {
                 }
             },
             onunmount: () => {
-                app.pb.cancelRequest(TOTAL_COUNT_REQUEST_KEY);
+                app.pb.cancelRequest(uniqueId);
 
                 watchers.forEach((w) => w?.unwatch());
 

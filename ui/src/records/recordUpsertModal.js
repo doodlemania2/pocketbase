@@ -43,39 +43,6 @@ window.app.modals.openRecordUpsert = function(collection, record = null, modalSe
     app.modals.open(modal);
 };
 
-const defaultRedactFields = ["expand"];
-
-function redacted(record, redactFields = defaultRedactFields) {
-    // create redacted clone only if necessery
-    if (redactFields.find((f) => typeof record[f] !== "undefined")) {
-        record = Object.assign({}, record);
-        for (let f of redactFields) {
-            delete record[f];
-        }
-    }
-
-    return record;
-}
-
-function downloadJSON(record) {
-    record = redacted(record);
-    app.utils.downloadJSON(record, record.collectionName + "_" + record.id + ".json");
-}
-
-function copyJSON(record) {
-    record = redacted(record);
-    app.utils.copyToClipboard(JSON.stringify(record, null, 2));
-    app.toasts.success("Record copied to clipboard!");
-}
-
-function serializeRecord(record) {
-    if (!record) {
-        return "";
-    }
-
-    return JSON.stringify(record);
-}
-
 const TAB_MAIN = "main";
 const TAB_AUTH_PROVIDERS = "authProviders";
 
@@ -131,12 +98,47 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
             return serializeRecord(data.originalRecord);
         },
         get hasChanges() {
-            return data.originalRecordHash != data.recordHash;
+            return (
+                data.originalRecordHash != data.recordHash
+                // manually check the password fields as they are out of the serialized hash
+                || (
+                    data.isAuthCollection
+                    && (!!data.record.password || !!data.record.passwordConfirm)
+                )
+            );
         },
         get isFormDisabled() {
             return data.isLoading || data.isSaving || (!data.isNew && !data.hasChanges);
         },
     });
+
+    // --- serialization helpers:
+
+    // redact common sensitive fields
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify#the_replacer_parameter
+    function redactedReplacer(key, val) {
+        switch (key) {
+            case "expand":
+                return undefined;
+            // exclude internal auth record sensitive fields
+            case "password":
+            case "passwordConfirm":
+            case "tokenKey":
+                return data.isAuthCollection ? undefined : val;
+        }
+
+        return val;
+    }
+
+    function serializeRecord(record) {
+        if (!record) {
+            return "";
+        }
+
+        return JSON.stringify(record, redactedReplacer);
+    }
+
+    // ---
 
     // note: not a getter to avoid the microtask batching
     function draftKey() {
@@ -193,36 +195,71 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
         data.record = draftClone;
     }
 
+    let draftWatcher;
+
+    function initDraftWatcher() {
+        data.initialDraft = getDraft();
+
+        draftWatcher?.unwatch();
+        draftWatcher = watch(() => data.recordHash, (newHash, oldHash) => {
+            if (typeof oldHash == "undefined") {
+                return;
+            }
+
+            if (data.hasChanges) {
+                saveDraft(newHash);
+            } else {
+                deleteDraft();
+            }
+        });
+    }
+
     async function initRecord(rawRecord) {
         data.isLoading = true;
 
-        const recordId = typeof rawRecord == "string" ? rawRecord : rawRecord?.id;
+        draftWatcher?.unwatch();
+
+        // normalize rawRecord (could be plain id string)
+        rawRecord = app.utils.isObject(rawRecord) ? rawRecord : { id: rawRecord || "" };
 
         // new record
-        if (!recordId) {
-            const record = app.utils.isObject(rawRecord) ? JSON.parse(JSON.stringify(rawRecord)) : {};
-            data.originalRecord = app.utils.emptyClone(record, ["collectionId", "collectionName"]);
-            data.initialDraft = getDraft();
-            data.record = record;
+        if (!rawRecord.id) {
+            data.originalRecord = JSON.parse(JSON.stringify(rawRecord));
+            data.record = JSON.parse(JSON.stringify(rawRecord));
+
             data.isLoading = false;
             data.isLocked = false;
+            initDraftWatcher();
             return;
         }
 
-        data.isLocked = !!app.store.settings?.meta?.hideControls;
-
         try {
-            // eagerly load to allow elements to show their "update" UI and minimize flickering
-            data.originalRecord = { id: recordId };
+            data.isLocked = !!app.store.settings?.meta?.hideControls;
 
-            const record = await app.pb.collection(collection.name).getOne(recordId, {
-                requestKey: "upsert_load_" + recordId,
+            // preload to minimize content jumps
+            data.originalRecord = JSON.parse(JSON.stringify(rawRecord));
+            data.record = JSON.parse(JSON.stringify(rawRecord));
+
+            // fetch to ensure that the main record fields are up-to-date
+            let record = await app.pb.collection(collection.name).getOne(rawRecord.id, {
+                requestKey: "upsert_load_" + rawRecord.id,
             });
 
-            data.originalRecord = record;
-            data.initialDraft = getDraft();
-            data.record = JSON.parse(JSON.stringify(record));
+            // preload existing expands (if any)
+            if (rawRecord.expand) {
+                record.expand = JSON.parse(JSON.stringify(rawRecord.expand));
+            }
+
+            // extend, not overwrite, to prevent reseting the reference passed down to the inputs
+            Object.assign(data.originalRecord, JSON.parse(JSON.stringify(record)));
+            Object.assign(data.record, JSON.parse(JSON.stringify(record)));
+
             data.isLoading = false;
+
+            // schedule a macro task to allow fields to populate their reactive values
+            setTimeout(() => {
+                initDraftWatcher();
+            }, 0);
         } catch (err) {
             if (!err?.isAbort) {
                 app.checkApiError(err);
@@ -232,24 +269,35 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
         }
     }
 
+    function deleteInternalKeys(record) {
+        for (let key in record) {
+            if (
+                key.startsWith("@@")
+                || (data.isAuthCollection && (key == "password" || key == "passwordConfirm"))
+            ) {
+                delete record[key];
+            }
+        }
+    }
+
     async function exportPayload() {
         const payload = {};
 
         // shallow copy of the record fields
-        for (const prop in data.record) {
+        for (const key in data.record) {
             // skip expand and internal dynamic enumerable props
-            if (prop == "expand" || prop.startsWith("@@")) {
+            if (key == "expand" || key.startsWith("@@")) {
                 continue;
             }
 
-            let val = data.record[prop]?.__raw || data.record[prop];
+            let val = data.record[key]?.__raw || data.record[key];
 
             // normalize undefined values
             if (typeof val == "undefined") {
                 val = null;
             }
 
-            payload[prop] = val;
+            payload[key] = val;
         }
 
         // apply fields save normalization funcs
@@ -297,12 +345,14 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
                 data.originalRecord = structuredClone(record);
                 data.record = structuredClone(record);
             } else {
-                // don't overwrite to prevent loosing the reference passed down to the inputs
+                // extend, not overwrite, to prevent reseting the reference passed down to the inputs
                 Object.assign(data.originalRecord, structuredClone(record));
                 Object.assign(data.record, structuredClone(record));
+                deleteInternalKeys(data.originalRecord);
+                deleteInternalKeys(data.record);
             }
 
-            modalSettings.onsave?.(structuredClone(record), isNew);
+            modalSettings.onsave?.(record, isNew);
 
             // reset all errors
             app.store.errors = null;
@@ -360,21 +410,15 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
         initRecord(clone);
     }
 
-    const watchers = [];
-
     function mainTab() {
         return [
             t.div(
                 { className: "modal-content" },
-                t.form(
+                t.div(
                     {
                         id: uniqueId + "form",
                         className: "grid",
                         inert: () => data.isLoading || data.isSaving,
-                        onsubmit: (e) => {
-                            e.preventDefault();
-                            // save(); // don't allow to prevent accidental save on input enter
-                        },
                         onmount: (el) => {
                             el._quickSaveHandler = (e) => {
                                 if ((e.ctrlKey || e.metaKey) && e.code == "KeyS") {
@@ -605,31 +649,12 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
             onbeforeopen: () => {
                 initRecord(rawRecord);
 
-                watchers.push(
-                    watch(() => data.recordHash, (newHash, oldHash) => {
-                        if (!oldHash || !newHash || newHash == "{}" || oldHash == "{}") {
-                            return;
-                        }
-
-                        saveDraft(newHash);
-                    }),
-                );
-
                 return modalSettings.onbeforeopen?.(el);
             },
             onafteropen: (el) => {
                 modalSettings.onafteropen?.(el);
             },
             onbeforeclose: (el, forceClosed) => {
-                if (
-                    // there are no unsaved changes
-                    !data.hasChanges
-                    // the form has been edited
-                    && data.initialDraftHash != getDraftHash()
-                ) {
-                    deleteDraft();
-                }
-
                 if (forceClosed) {
                     return modalSettings.onbeforeclose?.(el);
                 }
@@ -656,11 +681,10 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
             },
             onafterclose: (el) => {
                 modalSettings.onafterclose?.(el);
-                watchers.forEach((w) => w?.unwatch());
                 el?.remove();
             },
             onunmount: () => {
-                watchers.forEach((w) => w?.unwatch());
+                draftWatcher?.unwatch();
             },
         },
         t.header(
@@ -669,20 +693,15 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
                 { className: "grid" },
                 t.div(
                     { className: "col-12 flex" },
-                    t.h6({ className: "modal-title" }, () => {
-                        if (data.isLoading) {
-                            return t.span({ className: "loader sm" });
-                        }
-
-                        return [
-                            t.span(null, () => (data.isNew ? "Create " : "Edit ")),
-                            t.strong(
-                                { className: "txt-ellipsis collection-name", style: "max-width: 220px" },
-                                () => collection.name,
-                            ),
-                            t.span(null, " record"),
-                        ];
-                    }),
+                    t.h6(
+                        { className: "modal-title" },
+                        t.span(null, () => (data.isNew ? "Create " : "Edit ")),
+                        t.strong(
+                            { className: "txt-ellipsis collection-name", style: "max-width: 220px" },
+                            () => collection.name,
+                        ),
+                        t.span(null, " record"),
+                    ),
                     t.div({ className: "flex-fill" }),
                     () => {
                         if (app.utils.isEmpty(data.originalRecord?.id)) {
@@ -693,8 +712,8 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
                             t.button(
                                 {
                                     type: "button",
-                                    className: "btn sm circle transparent",
                                     title: "More options",
+                                    className: () => `btn sm circle transparent ${data.isLoading ? "loading" : ""}`,
                                     disabled: () => data.isLoading,
                                     "html-popovertarget": uniqueId + "modal-header-dropdown",
                                 },
@@ -741,7 +760,10 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
                                         className: "dropdown-item",
                                         onclick: (e) => {
                                             e.target.closest(".dropdown").hidePopover();
-                                            copyJSON(data.originalRecord);
+                                            app.utils.copyToClipboard(
+                                                JSON.stringify(data.originalRecord, redactedReplacer, 2),
+                                            );
+                                            app.toasts.success("Record copied to clipboard!");
                                         },
                                     },
                                     t.i({ className: "ri-braces-line", ariaHidden: true }),

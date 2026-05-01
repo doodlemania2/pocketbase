@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/pocketbase/pocketbase/tools/types"
 	"golang.org/x/oauth2"
@@ -40,7 +41,7 @@ func NewGitlabProvider() *Gitlab {
 
 // FetchAuthUser returns an AuthUser instance based the Gitlab's user api.
 //
-// API reference: https://docs.gitlab.com/ee/api/users.html#for-admin
+// API reference: https://docs.gitlab.com/api/users/#retrieve-the-current-user
 func (p *Gitlab) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
 	data, err := p.FetchRawUserInfo(token)
 	if err != nil {
@@ -53,11 +54,12 @@ func (p *Gitlab) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
 	}
 
 	extracted := struct {
-		Name      string `json:"name"`
-		Username  string `json:"username"`
-		Email     string `json:"email"`
-		AvatarURL string `json:"avatar_url"`
-		Id        int64  `json:"id"`
+		Name        string `json:"name"`
+		Username    string `json:"username"`
+		Email       string `json:"email"`
+		AvatarURL   string `json:"avatar_url"`
+		ConfirmedAt string `json:"confirmed_at"`
+		Id          int64  `json:"id"`
 	}{}
 	if err := json.Unmarshal(data, &extracted); err != nil {
 		return nil, err
@@ -67,7 +69,6 @@ func (p *Gitlab) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
 		Id:           strconv.FormatInt(extracted.Id, 10),
 		Name:         extracted.Name,
 		Username:     extracted.Username,
-		Email:        extracted.Email,
 		AvatarURL:    extracted.AvatarURL,
 		RawUser:      rawUser,
 		AccessToken:  token.AccessToken,
@@ -75,6 +76,11 @@ func (p *Gitlab) FetchAuthUser(token *oauth2.Token) (*AuthUser, error) {
 	}
 
 	user.Expiry, _ = types.ParseDateTime(token.Expiry)
+
+	confirmedAt, err := time.Parse(time.RFC3339, extracted.ConfirmedAt)
+	if err == nil && !confirmedAt.IsZero() {
+		user.Email = extracted.Email
+	}
 
 	return user, nil
 }

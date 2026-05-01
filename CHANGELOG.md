@@ -1,3 +1,45 @@
+## v0.37.5 (WIP)
+
+- Fixed password fields not being detected as changed ([#7670](https://github.com/pocketbase/pocketbase/issues/7670)).
+
+- Added the local time zone name next to the `date` field label.
+
+
+## v0.37.4
+
+- Added backups list scroll container ([#7655](https://github.com/pocketbase/pocketbase/issues/7655)).
+
+- Optimized record upsert and preview modals data loading to minimize layout jumps.
+
+- Fixed SMTP IPv6 network address format ([#7659](https://github.com/pocketbase/pocketbase/issues/7659)).
+
+- Fixed autocomplete selection not properly updating the underlying input value ([#7664](https://github.com/pocketbase/pocketbase/issues/7664)).
+
+- Added `ghupdate.BaseURL` config option ([#7665](https://github.com/pocketbase/pocketbase/issues/7665)).
+
+- Added dummy bcrypt password check for the failure auth path to minimize enumeration timing attacks when registrations are disabled.
+
+- Adjusted Bitbucket, GitHub, GitLab and Gitea/Forgejo OAuth2 providers to better reflect recent API updates and doc references.
+    _In case the userinfo data is not sufficient, some of the providers now send a separate list emails request in order to minimize eventual linking security issues caused by custom onpremise setups (e.g. Gitea/Forgejo allows skipping the email verification if an ENV variable is configured)._
+
+- ⚠️ Fixed a pre-hijacking OAuth2 linking vulnerability ([#7662](https://github.com/pocketbase/pocketbase/discussions/7662); thanks @Alardiians for reporting it privately).
+
+- Bumped Go and npm dependencies.
+
+
+## v0.37.3
+
+- Fixed total count load on page back/forward navigation.
+
+- Fixed `editor` floating dialogs position when scrolling ([#7653](https://github.com/pocketbase/pocketbase/issues/7653)).
+
+- Enabled text wrapping for the API rule fields.
+
+- Added view query sample loading indicator.
+
+- Other minor light UI contrast and styles improvements.
+
+
 ## v0.37.2
 
 - Fixed autoexpandable input in Firefox ([#7648](https://github.com/pocketbase/pocketbase/discussions/7648)).

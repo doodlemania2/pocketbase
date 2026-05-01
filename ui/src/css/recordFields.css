@@ -196,12 +196,6 @@
     }
 }
 
-.record-field-input {
-    .record-summary {
-        animation: fadeIn var(--animationSpeed);
-    }
-}
-
 .field-type-bool {
     &.record-field-view .label {
         min-width: 48px;
@@ -228,6 +222,11 @@
 .field-type-geoPoint {
     &.record-field-view {
         white-space: nowrap;
+    }
+    /* disable multiple unnecessery required marks */
+    &.record-field-input .field-list-item label::after {
+        content: none;
+        display: none;
     }
 }
 

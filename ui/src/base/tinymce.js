@@ -124,10 +124,10 @@ window.app.components.tinymce = function(propsArg = {}) {
 
         clearTimeout(changeTimeoutId);
 
-        // workaround for https://github.com/tinymce/tinymce/issues/9377
-        editorRef.dom?.unbind(document);
-
         catchError(() => {
+            // workaround for https://github.com/tinymce/tinymce/issues/9377
+            editorRef.dom?.unbind(document);
+
             window.tinymce?.remove(editorRef);
         });
         editorRef = null;
@@ -162,6 +162,7 @@ window.app.components.tinymce = function(propsArg = {}) {
             autoresize_bottom_margin: 30,
             media_poster: false,
             media_alt_source: false,
+            ui_mode: "split",
             codesample_languages: [
                 { text: "HTML/XML", value: "markup" },
                 { text: "CSS", value: "css" },
@@ -202,7 +203,7 @@ window.app.components.tinymce = function(propsArg = {}) {
                 "wordcount",
             ],
             toolbar:
-                "styles | alignleft aligncenter alignright | bold italic forecolor backcolor | bullist numlist | link table media_picker codesample | direction code",
+                "styles | alignleft aligncenter alignright | bold italic forecolor backcolor | bullist numlist | link media_picker table codesample | direction code",
             paste_postprocess: (editor, args) => {
                 cleanupPastedNode(args.node);
             },

@@ -137,7 +137,7 @@ migrate((app) => {
     "listRule": "@request.auth.id != '' && 1 > 0 || 'backtick` + "`" + `test' = 0",
     "manageRule": "1 != 2",
     "mfa": {
-      "duration": 1800,
+      "duration": 600,
       "enabled": false,
       "rule": ""
     },
@@ -183,7 +183,10 @@ migrate((app) => {
     "verificationToken": {
       "duration": 259200
     },
-    "viewRule": "id = \"1\""
+    "viewRule": "id = \"1\"",
+    "webauthn": {
+      "enabled": false
+    }
   });
 
   return app.save(collection);
@@ -319,7 +322,7 @@ func init() {
 			"listRule": "@request.auth.id != '' && 1 > 0 || 'backtick` + "` + \"`\" + `" + `test' = 0",
 			"manageRule": "1 != 2",
 			"mfa": {
-				"duration": 1800,
+				"duration": 600,
 				"enabled": false,
 				"rule": ""
 			},
@@ -365,7 +368,10 @@ func init() {
 			"verificationToken": {
 				"duration": 259200
 			},
-			"viewRule": "id = \"1\""
+			"viewRule": "id = \"1\"",
+			"webauthn": {
+				"enabled": false
+			}
 		}` + "`" + `
 
 		collection := &core.Collection{}
@@ -590,7 +596,7 @@ migrate((app) => {
     "listRule": "@request.auth.id != '' && 1 > 0 || 'backtick` + "`" + `test' = 0",
     "manageRule": "1 != 2",
     "mfa": {
-      "duration": 1800,
+      "duration": 600,
       "enabled": false,
       "rule": ""
     },
@@ -636,7 +642,10 @@ migrate((app) => {
     "verificationToken": {
       "duration": 259200
     },
-    "viewRule": "id = \"1\""
+    "viewRule": "id = \"1\"",
+    "webauthn": {
+      "enabled": false
+    }
   });
 
   return app.save(collection);
@@ -775,7 +784,7 @@ func init() {
 			"listRule": "@request.auth.id != '' && 1 > 0 || 'backtick` + "` + \"`\" + `" + `test' = 0",
 			"manageRule": "1 != 2",
 			"mfa": {
-				"duration": 1800,
+				"duration": 600,
 				"enabled": false,
 				"rule": ""
 			},
@@ -821,7 +830,10 @@ func init() {
 			"verificationToken": {
 				"duration": 259200
 			},
-			"viewRule": "id = \"1\""
+			"viewRule": "id = \"1\"",
+			"webauthn": {
+				"enabled": false
+			}
 		}` + "`" + `
 
 		collection := &core.Collection{}
