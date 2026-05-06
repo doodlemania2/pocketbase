@@ -106,8 +106,8 @@ See [FORK_SYNC.md](FORK_SYNC.md) for the upstream sync workflow.
 
 | Field | Value |
 |-------|-------|
-| Based on PocketBase | `master` @ `dbcd95eb` (post v0.37.4) |
-| Last sync | 2026-05-01 |
+| Based on PocketBase | `master` @ `0cf34c47` (v0.37.5) |
+| Last sync | 2026-05-05 |
 | WebAuthn tests | All 27 passing |
 
 ## Companion Packages
