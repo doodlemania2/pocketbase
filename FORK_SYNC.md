@@ -46,6 +46,39 @@ make test
 
 All 27 WebAuthn test scenarios must pass, plus all upstream tests.
 
+### Step 3b: Opportunistic WebAuthn dependency check
+
+While on `feat/webauthn-passkey-support`, check for newer releases of the
+WebAuthn library and bump if patch/minor and non-breaking:
+
+```bash
+go list -m -u github.com/go-webauthn/webauthn github.com/go-webauthn/x
+```
+
+If a newer version is available:
+
+1. Review the release notes at https://github.com/go-webauthn/webauthn/releases
+   for **BREAKING CHANGES**. Pay particular attention to:
+   - `webauthn.Config` field changes (esp. `RPTopOrigins`,
+     `RPAllowCrossOrigin`, `RPTopOriginVerificationMode`)
+   - `Credential` / `CredentialDescriptor` shape changes (e.g. the v0.17.0
+     `AttestationType` → `AttestationFormat` split)
+   - Removed constants (e.g. `protocol.CredentialTypeFIDOU2F`)
+2. Grep for any affected APIs in `apis/record_auth_with_webauthn.go` and
+   `core/webauthn_credential_model.go` before bumping.
+3. Bump and tidy:
+
+   ```bash
+   go get github.com/go-webauthn/webauthn@vX.Y.Z
+   go mod tidy
+   go test -count=1 -run 'WebAuthn|Webauthn' ./apis/... ./core/...
+   ```
+
+4. Commit as `deps(webauthn): bump go-webauthn/webauthn vA -> vB` with the
+   relevant release notes summarized in the body.
+5. Update the version reference in `FORK.md` ("Modified Files" table) and
+   `WEBAUTHN_PLAN.md` (status table) to match.
+
 ### Step 4: Rebase deploy branch onto updated WebAuthn
 
 ```bash
