@@ -60,7 +60,7 @@ Containerized deployment with continuous SQLite backup:
 | `core/event_request.go` | `RequestInfoContextWebAuthn` constant |
 | `apis/record_auth.go` | 7 route bindings with middleware (rate limiting, auth) |
 | `apis/record_auth_methods.go` | `webauthn` field in auth methods response |
-| `go.mod` / `go.sum` | `go-webauthn/webauthn v0.16.4` + transitive deps |
+| `go.mod` / `go.sum` | `go-webauthn/webauthn v0.17.2` + transitive deps |
 | `core/collection_model_test.go` | Updated JSON snapshot for webauthn field |
 | `core/collection_query_test.go` | System collection count 16 → 17 |
 | `apis/collection_test.go` | `totalItems` count 16 → 17 |
