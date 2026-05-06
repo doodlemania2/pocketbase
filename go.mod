@@ -12,7 +12,7 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.13
 	github.com/ganigeorgiev/fexpr v0.5.0
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
-	github.com/go-webauthn/webauthn v0.17.0
+	github.com/go-webauthn/webauthn v0.17.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/pocketbase/dbx v1.12.0
 	github.com/pocketbase/tygoja v0.0.0-20250812183945-97ffe055281f
