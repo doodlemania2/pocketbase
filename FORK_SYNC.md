@@ -4,9 +4,23 @@ How to keep this fork in sync with upstream PocketBase releases.
 
 ## Prerequisites
 
+This clone uses an **inverted** remote layout (historical):
+
+| Remote | URL | Role |
+| --- | --- | --- |
+| `origin` | `https://github.com/pocketbase/pocketbase.git` | **Upstream** — fetch only, never push |
+| `fork` | `https://github.com/doodlemania2/pocketbase.git` | Our fork — push target |
+
+Verify with `git remote -v` before running any of the commands below. If your
+clone has the conventional layout (`origin` = fork, `upstream` = upstream),
+swap the remote names in every command accordingly.
+
 ```bash
-# Add upstream remote (one-time setup)
-git remote add upstream https://github.com/pocketbase/pocketbase.git
+# One-time setup for a fresh clone matching this doc's layout:
+# git clone https://github.com/pocketbase/pocketbase.git
+# cd pocketbase
+# git remote add fork https://github.com/doodlemania2/pocketbase.git
+# git fetch fork
 ```
 
 ## Sync Procedure
@@ -14,14 +28,15 @@ git remote add upstream https://github.com/pocketbase/pocketbase.git
 ### Step 1: Fetch upstream
 
 ```bash
-git fetch upstream
+git fetch origin   # upstream pocketbase/pocketbase
+git fetch fork     # our fork (for tracking branches)
 ```
 
 ### Step 2: Rebase WebAuthn branch onto upstream
 
 ```bash
 git checkout feat/webauthn-passkey-support
-git rebase upstream/master
+git rebase origin/master
 ```
 
 **If conflicts occur**, they will be limited to these files:
@@ -123,12 +138,36 @@ Update the "Upstream Sync Status" table in `FORK.md` with:
 
 ## Force Push (after successful rebase)
 
+Push to the **`fork`** remote (which is our fork). `origin` is the upstream
+pocketbase/pocketbase — never push to it.
+
 ```bash
 git checkout feat/webauthn-passkey-support
-git push --force-with-lease origin feat/webauthn-passkey-support
+git push --force-with-lease fork feat/webauthn-passkey-support
 
 git checkout deploy/azure
-git push --force-with-lease origin deploy/azure
+git push --force-with-lease fork deploy/azure
 ```
 
 > **Use `--force-with-lease`** instead of `--force` to prevent overwriting someone else's changes.
+
+## Step 7: Merge deploy/azure into fork's `master`
+
+The fork's default branch is `master` on `fork` (doodlemania2/pocketbase). After
+the rebased `deploy/azure` is force-pushed, fast-forward (or merge) it into
+`master` so consumers of the fork's default branch pick up the sync.
+
+Because `deploy/azure` is rebased onto fresh upstream, `fork/master` will have
+diverged. Use a merge commit (matches the pattern of previous syncs):
+
+```bash
+git checkout master           # local tracking of fork/master
+git fetch fork
+git reset --hard fork/master  # ensure clean starting point
+git merge --no-ff deploy/azure -m "Merge deploy/azure: upstream vX.Y.Z sync + webauthn vA.B.C"
+git push fork master
+```
+
+If the merge conflicts (it normally won't, since `deploy/azure` already
+contains everything that's on `master`), prefer `-X theirs` to take the
+`deploy/azure` side, then re-run tests.
