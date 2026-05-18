@@ -106,9 +106,10 @@ See [FORK_SYNC.md](FORK_SYNC.md) for the upstream sync workflow.
 
 | Field | Value |
 |-------|-------|
-| Based on PocketBase | `master` @ `d438c6a9` (v0.38.0) |
-| Last sync | 2026-05-14 |
-| WebAuthn tests | All 27 passing |
+| Based on PocketBase | `master` @ `a286d28b` (v0.38.1) |
+| Last sync | 2026-05-17 |
+| WebAuthn tests | All passing (WebAuthn-scoped go test) |
+| Deploy validation | `docker build` + container `/api/health` 200 OK |
 
 ## Companion Packages
 
