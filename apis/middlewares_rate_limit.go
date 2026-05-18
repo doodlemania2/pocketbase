@@ -2,6 +2,7 @@ package apis
 
 import (
 	"errors"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -106,6 +107,41 @@ func checkCollectionRateLimit(e *core.RequestEvent, collection *core.Collection,
 	return nil
 }
 
+// isIPInList checks if the specified IP is in a list of other individual IPs or subnets.
+func isIPInList(ipsOrSubnets []string, ip string) bool {
+	if len(ipsOrSubnets) == 0 || ip == "" {
+		return false
+	}
+
+	// normalize
+	searchAddr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+
+	for _, item := range ipsOrSubnets {
+		// subnet?
+		prefix, err := netip.ParsePrefix(item)
+		if err == nil {
+			if prefix.Contains(searchAddr) {
+				return true
+			}
+			continue
+		}
+
+		// individual ip?
+		addr, err := netip.ParseAddr(item)
+		if err == nil {
+			if addr == searchAddr {
+				return true
+			}
+			continue
+		}
+	}
+
+	return false
+}
+
 // -------------------------------------------------------------------
 
 // @todo consider exporting as helper?
@@ -153,7 +189,9 @@ func checkRateLimit(e *core.RequestEvent, rtId string, rule core.RateLimitRule) 
 }
 
 func skipRateLimit(e *core.RequestEvent) bool {
-	return !e.App.Settings().RateLimits.Enabled || e.HasSuperuserAuth()
+	return !e.App.Settings().RateLimits.Enabled ||
+		e.HasSuperuserAuth() ||
+		isIPInList(e.App.Settings().RateLimits.ExcludedIPs, e.RealIP())
 }
 
 var defaultAuthAudience = []string{core.RateLimitRuleAudienceAll, core.RateLimitRuleAudienceAuth}

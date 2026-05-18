@@ -19,11 +19,20 @@ export function logsList(logsSettings) {
         },
     });
 
+    // used as loose guard to prevent new logs to constantly push the old ones to later pages
+    let loadStartDate;
+
     async function load(reset = false) {
         logsSettings.isListLoading = true;
 
         try {
-            const page = reset ? 1 : data.lastPage + 1;
+            let page;
+            if (reset) {
+                page = 1;
+                loadStartDate = new Date().toISOString().replace("T", " ");
+            } else {
+                page = data.lastPage + 1;
+            }
 
             const normalizedFilter = (logsSettings.presets || []).concat(
                 app.utils.normalizeSearchFilter(logsSettings.filter, ["level", "message", "data"]),
@@ -41,9 +50,8 @@ export function logsList(logsSettings) {
                 const max = app.utils.toRFC3339Datetime(maxDate);
 
                 normalizedFilter.push(`created >= "${min}" && created <= "${max}"`);
-            } else if (page > 1) {
-                // minimize duplicates in case there were new logs that push the old ones to later pages
-                normalizedFilter.push(`created <= "${data.logs[data.logs.length - 1].created}"`);
+            } else {
+                normalizedFilter.push(`created <= "${loadStartDate}"`);
             }
 
             const result = await app.pb.logs.getList(page, perPage, {
@@ -275,14 +283,13 @@ export function logsList(logsSettings) {
 
                                     return t.div(
                                         { className: "sticky-content txt-center txt-hint" },
-                                        t.p({ className: "txt-bold" }, "No logs found."),
+                                        t.div({ className: "txt-bold" }, "No logs found."),
                                         t.button(
                                             {
                                                 hidden: () =>
-                                                    logsSettings.filter?.length
-                                                    || app.utils.isEmpty(logsSettings.zoom),
+                                                    logsSettings.filter?.length || app.utils.isEmpty(logsSettings.zoom),
                                                 type: "button",
-                                                className: "btn secondary expanded-lg",
+                                                className: "btn secondary expanded-lg m-t-10",
                                                 onclick() {
                                                     logsSettings.zoom = {};
                                                 },
@@ -293,7 +300,7 @@ export function logsList(logsSettings) {
                                             {
                                                 hidden: () => !logsSettings.filter?.length,
                                                 type: "button",
-                                                className: "btn secondary expanded-lg",
+                                                className: "btn secondary expanded-lg m-t-10",
                                                 onclick() {
                                                     logsSettings.filter = "";
                                                 },

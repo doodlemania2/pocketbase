@@ -135,7 +135,7 @@ body {
     height: 100%;
 
     /* normalizes IBM Plex Sans font rendering between Chrome and Firefox */
-    letter-spacing: 0.1px;
+    letter-spacing: 0.004em;
 }
 
 h1,
@@ -411,6 +411,10 @@ hr {
 }
 
 /* txt helpers */
+.txt-base {
+    line-height: var(--lineHeight) !important;
+    font-size: var(--fontSize) !important;
+}
 .txt-sm {
     line-height: var(--smLineHeight) !important;
     font-size: var(--smFontSize) !important;
@@ -513,7 +517,9 @@ hr {
     text-decoration: none;
     border-radius: var(--borderRadius);
     color: var(--linkColor);
-    transition: color var(--animationSpeed);
+    transition:
+        color var(--animationSpeed),
+        opacity var(--animationSpeed);
     user-select: none;
     &:hover,
     &:focus-visible {

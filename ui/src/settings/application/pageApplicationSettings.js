@@ -1,6 +1,7 @@
 import { settingsSidebar } from "../settingsSidebar";
 import { batchAccordion } from "./batchAccordion";
 import { rateLimitAccordion, sortRules } from "./rateLimitAccordion";
+import { superuserAccordion } from "./superuserAccordion";
 import { trustedProxyAccordion } from "./trustedProxyAccordion";
 
 export function pageApplicationSettings() {
@@ -14,8 +15,11 @@ export function pageApplicationSettings() {
         get originalFormSettingsHash() {
             return JSON.stringify(data.originalFormSettings);
         },
+        get formSettingsHash() {
+            return JSON.stringify(data.formSettings);
+        },
         get hasChanges() {
-            return data.originalFormSettingsHash != JSON.stringify(data.formSettings);
+            return data.originalFormSettingsHash != data.formSettingsHash;
         },
     });
 
@@ -37,6 +41,58 @@ export function pageApplicationSettings() {
         }
     }
 
+    function hasSuperuserIPsChanged() {
+        return JSON.stringify(data.formSettings?.superuserIPs)
+            != JSON.stringify(data.originalFormSettings?.superuserIPs);
+    }
+
+    async function saveWithConfirm() {
+        const oldSuperuserIPs = app.utils.toArray(data.originalFormSettings?.superuserIPs);
+        const superuserIPs = app.utils.toArray(data.formSettings?.superuserIPs);
+
+        if (
+            !superuserIPs.length
+            // no change
+            || JSON.stringify(oldSuperuserIPs) == JSON.stringify(superuserIPs)
+        ) {
+            return save();
+        }
+
+        return app.modals.confirm(
+            t.div(
+                { className: "txt-center" },
+                t.h6(
+                    null,
+                    "The ONLY allowed superuser IPs will change to: ",
+                    t.br(),
+                    t.strong(null, superuserIPs.join(", ")),
+                ),
+                t.p(null, "Please make sure that your IP is in the list or you'll be locked."),
+                t.p(
+                    { className: "txt-hint" },
+                    "In case of lockout, you can reset the setting with the ",
+                    t.a(
+                        {
+                            href: import.meta.env.PB_SUPERUSER_IPS_RESET_DOCS,
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            className: "link-primary txt-bold txt-sm",
+                        },
+                        t.code(
+                            null,
+                            "superuser ips",
+                            t.i({ ariaHidden: true, className: "ri-arrow-right-up-line txt-sm" }),
+                        ),
+                    ),
+                    " console command.",
+                ),
+            ),
+            () => save(),
+            null,
+            { yesButton: "Yes, save changes" },
+        );
+    }
+
     async function save() {
         if (data.isSaving || !data.hasChanges) {
             return;
@@ -48,8 +104,19 @@ export function pageApplicationSettings() {
 
         try {
             const redacted = app.utils.filterRedactedProps(data.formSettings);
-            const settings = await app.pb.settings.update(redacted);
-            init(settings);
+
+            const updatedSettings = await app.pb.settings.update(redacted);
+
+            // reauthenticate to ensure that the superuser has still access
+            if (hasSuperuserIPsChanged()) {
+                try {
+                    await app.pb.collection("_superusers").authRefresh();
+                } catch (_) {
+                    app.pb.authStore.clear();
+                }
+            }
+
+            init(updatedSettings);
 
             app.toasts.success("Successfully saved application settings.");
         } catch (err) {
@@ -73,10 +140,11 @@ export function pageApplicationSettings() {
         }
 
         data.originalFormSettings = {
+            superuserIPs: settings.superuserIPs || [],
             meta: settings.meta || {},
             batch: settings.batch || {},
             trustedProxy: settings.trustedProxy || { headers: [] },
-            rateLimits: settings.rateLimits || { rules: [] },
+            rateLimits: settings.rateLimits || { excludedIPs: [], rules: [] },
         };
 
         sortRules(data.originalFormSettings.rateLimits.rules);
@@ -118,7 +186,7 @@ export function pageApplicationSettings() {
                             inert: () => data.isSaving,
                             onsubmit: (e) => {
                                 e.preventDefault();
-                                save();
+                                saveWithConfirm();
                             },
                         },
                         t.div(
@@ -144,7 +212,11 @@ export function pageApplicationSettings() {
                                 t.input({
                                     id: "meta.appURL",
                                     name: "meta.appURL",
-                                    type: "url",
+                                    // note: text for compatibility with older versions
+                                    // (https://github.com/pocketbase/pocketbase/issues/7681)
+                                    //
+                                    // @todo consider reverting back to "url" once enforced on the backend too
+                                    type: "text",
                                     required: true,
                                     value: () => data.formSettings.meta.appURL || "",
                                     oninput: (e) => (data.formSettings.meta.appURL = e.target.value),
@@ -158,9 +230,10 @@ export function pageApplicationSettings() {
                         ),
                         t.div(
                             { className: "col-lg-12" },
+                            () => batchAccordion(data),
                             () => trustedProxyAccordion(data),
                             () => rateLimitAccordion(data),
-                            () => batchAccordion(data),
+                            () => superuserAccordion(data),
                         ),
                         t.div(
                             { className: "col-lg-12" },
@@ -204,7 +277,7 @@ export function pageApplicationSettings() {
                                 ),
                                 t.button(
                                     {
-                                        className: () => `btn expanded ${data.isSaving ? "loading" : ""}`,
+                                        className: () => `btn expanded-lg ${data.isSaving ? "loading" : ""}`,
                                         disabled: () => !data.hasChanges || data.isSaving,
                                     },
                                     t.span({ className: "txt" }, "Save changes"),

@@ -120,6 +120,10 @@ var (
 )
 
 type settings struct {
+	// SuperuserIPs defines an optional list of the superuser allowed
+	// individual IPs and subnets (in CIDR notation).
+	SuperuserIPs []string `form:"superuserIPs" json:"superuserIPs"`
+
 	SMTP         SMTPConfig         `form:"smtp" json:"smtp"`
 	Backups      BackupsConfig      `form:"backups" json:"backups"`
 	S3           S3Config           `form:"s3" json:"s3"`
@@ -253,6 +257,12 @@ func (s *Settings) DBExport(app App) (map[string]any, error) {
 	}
 	result["updated"] = now
 
+	// @todo remove with encoding/json/2
+	// serialize as empty array
+	if s.settings.SuperuserIPs == nil {
+		s.settings.SuperuserIPs = []string{}
+	}
+
 	encoded, err := json.Marshal(s.settings)
 	if err != nil {
 		return nil, err
@@ -280,6 +290,7 @@ func (s *Settings) PostValidate(ctx context.Context, app App) error {
 	defer s.mu.RUnlock()
 
 	return validation.ValidateStructWithContext(ctx, s,
+		validation.Field(&s.SuperuserIPs, validation.Each(validation.Required, validation.By(validators.IPOrSubnet))),
 		validation.Field(&s.Meta),
 		validation.Field(&s.Logs),
 		validation.Field(&s.SMTP),
@@ -341,6 +352,12 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		if v != nil && *v != "" {
 			*v = ""
 		}
+	}
+
+	// @todo remove with encoding/json/2
+	// serialize as empty array
+	if copy.SuperuserIPs == nil {
+		copy.SuperuserIPs = []string{}
 	}
 
 	return json.Marshal(copy)
@@ -531,6 +548,7 @@ func (c MetaConfig) Validate() error {
 	return validation.ValidateStruct(&c,
 		validation.Field(&c.AccentColor, validation.Length(7, 7), is.HexColor),
 		validation.Field(&c.AppName, validation.Required, validation.Length(1, 255)),
+		// @todo when replacing the URL validator we may need a system migration to normalize values without protocol
 		validation.Field(&c.AppURL, validation.Required, is.URL),
 		validation.Field(&c.SenderName, validation.Required, validation.Length(1, 255)),
 		validation.Field(&c.SenderAddress, is.EmailFormat, validation.Required),
@@ -587,8 +605,9 @@ func (c TrustedProxyConfig) Validate() error {
 // -------------------------------------------------------------------
 
 type RateLimitsConfig struct {
-	Rules   []RateLimitRule `form:"rules" json:"rules"`
-	Enabled bool            `form:"enabled" json:"enabled"`
+	Rules       []RateLimitRule `form:"rules" json:"rules"`
+	ExcludedIPs []string        `form:"excludedIPs" json:"excludedIPs"`
+	Enabled     bool            `form:"enabled" json:"enabled"`
 }
 
 // FindRateLimitRule returns the first matching rule based on the provided labels.
@@ -633,6 +652,9 @@ func (c RateLimitsConfig) MarshalJSON() ([]byte, error) {
 	if c.Rules == nil {
 		c.Rules = []RateLimitRule{}
 	}
+	if c.ExcludedIPs == nil {
+		c.ExcludedIPs = []string{}
+	}
 
 	return json.Marshal(alias(c))
 }
@@ -644,6 +666,10 @@ func (c RateLimitsConfig) Validate() error {
 			&c.Rules,
 			validation.When(c.Enabled, validation.Required),
 			validation.By(checkUniqueRuleLabel),
+		),
+		validation.Field(
+			&c.ExcludedIPs,
+			validation.Each(validation.Required, validation.By(validators.IPOrSubnet)),
 		),
 	)
 }
