@@ -8,10 +8,13 @@ PORT=${PB_PORT:-8090}
 # Default serve command arguments
 DEFAULT_SERVE_ARGS="serve --http=${HOST}:${PORT} --dir=/pb_data --publicDir=/pb_public --hooksDir=/pb_hooks"
 
-# Function to create superuser if environment variables are set
+# Function to bootstrap superuser on first boot only.
+# Uses `create` (not `upsert`) so an admin-set password is preserved across
+# container restarts. Failure is ignored — the most common case is "email
+# already exists", which means the account was already bootstrapped.
 create_superuser() {
     if [ -n "$PB_ADMIN_EMAIL" ] && [ -n "$PB_ADMIN_PASSWORD" ]; then
-        /usr/local/bin/pocketbase superuser upsert "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb_data
+        /usr/local/bin/pocketbase superuser create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb_data 2>/dev/null || true
     fi
 }
 
