@@ -2,19 +2,28 @@ package apis
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	validation "github.com/go-ozzo/ozzo-validation/v4"
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/security"
 )
+
+// maxWebAuthnFinishBody is the max accepted body size (in bytes) for the
+// WebAuthn register-finish / login-finish endpoints. Generous enough for
+// attestation objects from any common authenticator but small enough to
+// reject obvious abuse.
+const maxWebAuthnFinishBody = 1 << 20 // 1 MiB
 
 const (
 	webauthnSessionPrefix = "webauthn:session:"
@@ -149,6 +158,27 @@ func deleteWebAuthnSession(app core.App, token string) {
 	app.Store().Remove(webauthnSessionPrefix + token)
 }
 
+// readWebAuthnFinishBody slurps the request body into memory so it can be
+// parsed twice (once as the PocketBase form fields and once by the
+// go-webauthn library). It bypasses BindBody because the WebAuthn parser
+// closes the body after use, which collides with PocketBase's rereadable
+// body wrapper.
+func readWebAuthnFinishBody(e *core.RequestEvent) ([]byte, error) {
+	if e.Request.Body == nil {
+		return nil, nil
+	}
+	defer e.Request.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(e.Request.Body, maxWebAuthnFinishBody+1))
+	if err != nil {
+		return nil, e.BadRequestError("Failed to read request body.", err)
+	}
+	if int64(len(body)) > maxWebAuthnFinishBody {
+		return nil, e.BadRequestError("Request body too large.", nil)
+	}
+	return body, nil
+}
+
 // -------------------------------------------------------------------
 // Registration flow
 // -------------------------------------------------------------------
@@ -219,10 +249,20 @@ func recordWebAuthnRegisterFinish(e *core.RequestEvent) error {
 		return e.UnauthorizedError("Authentication is required.", nil)
 	}
 
-	// Parse the session token and optional credential name from the form
+	// Read the body once so we can both validate the form fields and feed
+	// the bytes to the WebAuthn parser. The go-webauthn library closes the
+	// request body after parsing, which conflicts with PocketBase's
+	// rereadable body wrapper if we let it touch the live *http.Request.
+	bodyBytes, err := readWebAuthnFinishBody(e)
+	if err != nil {
+		return err
+	}
+
 	form := &webauthnRegisterFinishForm{}
-	if err := e.BindBody(form); err != nil {
-		return firstApiError(err, e.BadRequestError("An error occurred while loading the submitted data.", err))
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, form); err != nil {
+			return e.BadRequestError("An error occurred while loading the submitted data.", err)
+		}
 	}
 	if err := form.validate(); err != nil {
 		return firstApiError(err, e.BadRequestError("An error occurred while validating the submitted data.", err))
@@ -253,7 +293,11 @@ func recordWebAuthnRegisterFinish(e *core.RequestEvent) error {
 		credentials: existingCreds,
 	}
 
-	cred, err := wa.FinishRegistration(user, *entry.Session, e.Request)
+	parsedResponse, err := protocol.ParseCredentialCreationResponseBytes(bodyBytes)
+	if err != nil {
+		return e.BadRequestError("Failed to verify WebAuthn registration.", err)
+	}
+	cred, err := wa.CreateCredential(user, *entry.Session, parsedResponse)
 	if err != nil {
 		return e.BadRequestError("Failed to verify WebAuthn registration.", err)
 	}
@@ -372,9 +416,16 @@ func recordWebAuthnLoginFinish(e *core.RequestEvent) error {
 		return e.ForbiddenError("The collection is not configured to allow WebAuthn authentication.", nil)
 	}
 
+	bodyBytes, err := readWebAuthnFinishBody(e)
+	if err != nil {
+		return err
+	}
+
 	form := &webauthnLoginFinishForm{}
-	if err := e.BindBody(form); err != nil {
-		return firstApiError(err, e.BadRequestError("An error occurred while loading the submitted data.", err))
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, form); err != nil {
+			return e.BadRequestError("An error occurred while loading the submitted data.", err)
+		}
 	}
 	if err := form.validate(); err != nil {
 		return firstApiError(err, e.BadRequestError("An error occurred while validating the submitted data.", err))
@@ -426,7 +477,11 @@ func recordWebAuthnLoginFinish(e *core.RequestEvent) error {
 		credentials: existingCreds,
 	}
 
-	cred, err := wa.FinishLogin(user, *entry.Session, e.Request)
+	parsedResponse, err := protocol.ParseCredentialRequestResponseBytes(bodyBytes)
+	if err != nil {
+		return e.BadRequestError("Failed to authenticate.", err)
+	}
+	cred, err := wa.ValidateLogin(user, *entry.Session, parsedResponse)
 	if err != nil {
 		return e.BadRequestError("Failed to authenticate.", err)
 	}
