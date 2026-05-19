@@ -58,7 +58,7 @@ func recordConfirmPasskeyResetBegin(e *core.RequestEvent) error {
 		return e.InternalServerError("Failed to begin WebAuthn registration.", err)
 	}
 
-	token := storeWebAuthnSession(e.App, session, record.Id)
+	token := storeWebAuthnSession(e.App, session, record.Id, false)
 
 	return e.JSON(http.StatusOK, map[string]any{
 		"options":      options,
