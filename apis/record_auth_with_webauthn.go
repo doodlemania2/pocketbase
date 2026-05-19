@@ -1,6 +1,7 @@
 package apis
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -167,7 +168,6 @@ func readWebAuthnFinishBody(e *core.RequestEvent) ([]byte, error) {
 	if e.Request.Body == nil {
 		return nil, nil
 	}
-	defer e.Request.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(e.Request.Body, maxWebAuthnFinishBody+1))
 	if err != nil {
@@ -176,8 +176,26 @@ func readWebAuthnFinishBody(e *core.RequestEvent) ([]byte, error) {
 	if int64(len(body)) > maxWebAuthnFinishBody {
 		return nil, e.BadRequestError("Request body too large.", nil)
 	}
+
+	// Replace the request body with a rereadable in-memory reader so any
+	// downstream code (e.g. RequestInfo/BindBody invoked by record access
+	// rules during App.Save) can re-read it without hitting the consumed
+	// rereadable wrapper or its closed bufferWithFile.
+	e.Request.Body = &bytesRereader{data: body, r: bytes.NewReader(body)}
+
 	return body, nil
 }
+
+// bytesRereader is a minimal io.ReadCloser + router.Rereader that allows
+// the request body to be read multiple times from an in-memory byte slice.
+type bytesRereader struct {
+	data []byte
+	r    *bytes.Reader
+}
+
+func (b *bytesRereader) Read(p []byte) (int, error) { return b.r.Read(p) }
+func (b *bytesRereader) Close() error               { return nil }
+func (b *bytesRereader) Reread()                    { b.r = bytes.NewReader(b.data) }
 
 // -------------------------------------------------------------------
 // Registration flow
