@@ -13,3 +13,16 @@ Makefile
 docker-compose.yml
 .azure
 infra
+ui/node_modules
+ui/.svelte-kit
+.vscode
+.idea
+.DS_Store
+**/.DS_Store
+*.log
+*.tmp
+*.swp
+DEPLOY.md
+FORK*.md
+WEBAUTHN_PLAN.md
+CHANGELOG*.md
