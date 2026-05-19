@@ -19,11 +19,8 @@ param containerRegistryLoginServer string
 @description('ACR name')
 param containerRegistryName string
 
-@description('Storage account name for Azure Files and Blob')
+@description('Storage account name for Litestream blob backups')
 param storageAccountName string
-
-@description('File share name for pb_data')
-param fileShareName string
 
 @description('Blob container name for Litestream backups')
 param blobContainerName string
@@ -35,6 +32,31 @@ param pbAdminEmail string = ''
 @description('PocketBase admin password')
 @secure()
 param pbAdminPassword string = ''
+
+@description('Resource ID of the shared Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+@description('Customer ID (GUID) of the shared Log Analytics workspace')
+param logAnalyticsCustomerId string
+
+@description('Connection string for the shared Application Insights instance')
+@secure()
+param appInsightsConnectionString string
+
+@description('Custom domain (e.g., auth.example.com). Leave empty to skip binding/managed cert.')
+param customDomain string = ''
+
+@description('Phase 2 flag: bind the managed certificate. Run first deploy with this false to add the hostname (which the cert provisioning requires), then re-run with true to issue + bind the cert.')
+param bindCertificate bool = false
+
+@description('Container image reference. Defaults to a placeholder; azd deploy replaces with the real image after build.')
+param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+
+// Reference the shared Log Analytics workspace (cross-RG) to fetch its shared key for Container Apps env wiring
+resource sharedLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: last(split(logAnalyticsWorkspaceId, '/'))
+  scope: resourceGroup(split(logAnalyticsWorkspaceId, '/')[4])
+}
 
 // Managed Identity
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -76,12 +98,19 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-// Container Apps Environment
+// Container Apps Environment - logs stream to the shared central Log Analytics workspace
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
   location: location
   tags: tags
   properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalyticsCustomerId
+        sharedKey: sharedLaw.listKeys().primarySharedKey
+      }
+    }
     workloadProfiles: [
       {
         name: 'Consumption'
@@ -91,18 +120,23 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-// Azure Files storage mount on the environment
+// Azure Files storage mount removed — SQLite locking is unreliable over SMB-mounted Azure Files.
+// /pb_data lives on the container's ephemeral writable layer; durability is provided by Litestream
+// replication to the blob container (restored on every container start via entrypoint.sh).
 var storageAccountKey = storageAccount.listKeys().keys[0].value
-resource envStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+
+// Free Azure-managed TLS certificate for the custom domain (Phase 2 only).
+// Container Apps requires the hostname to be present on a container app in the environment
+// BEFORE the managed cert can be created, so this is gated behind `bindCertificate`.
+// Phase 1 deploys the hostname with bindingType='Disabled' (no cert). Phase 2 sets
+// bindCertificate=true to create the cert and switch the binding to SniEnabled.
+resource managedCert 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (!empty(customDomain) && bindCertificate) {
   parent: environment
-  name: 'pbdata'
+  name: empty(customDomain) ? 'placeholder' : replace(customDomain, '.', '-')
+  location: location
   properties: {
-    azureFile: {
-      accountName: storageAccountName
-      accountKey: storageAccountKey
-      shareName: fileShareName
-      accessMode: 'ReadWrite'
-    }
+    subjectName: customDomain
+    domainControlValidation: 'CNAME'
   }
 }
 
@@ -123,16 +157,29 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: environment.id
     configuration: {
       activeRevisionsMode: 'Single'
-      secrets: [
+      secrets: concat([
         { name: 'storage-key', value: storageAccountKey }
+        { name: 'appinsights-connection-string', value: appInsightsConnectionString }
+      ], empty(pbAdminEmail) ? [] : [
         { name: 'pb-admin-email', value: pbAdminEmail }
+      ], empty(pbAdminPassword) ? [] : [
         { name: 'pb-admin-password', value: pbAdminPassword }
-      ]
+      ])
       ingress: {
         external: true
         targetPort: 8090
         transport: 'http'
         allowInsecure: false
+        customDomains: empty(customDomain) ? [] : [
+          bindCertificate ? {
+            name: customDomain
+            bindingType: 'SniEnabled'
+            certificateId: managedCert.id
+          } : {
+            name: customDomain
+            bindingType: 'Disabled'
+          }
+        ]
       }
       registries: [
         {
@@ -145,26 +192,23 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'pocketbase'
-          image: '${containerRegistryLoginServer}/pocketbase:latest'
+          image: containerImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
           }
-          env: [
+          env: concat([
             { name: 'PB_HOST', value: '0.0.0.0' }
             { name: 'PB_PORT', value: '8090' }
             { name: 'LITESTREAM_REPLICA_URL', value: 'abs://${blobContainerName}' }
-            { name: 'LITESTREAM_ACCESS_KEY_ID', value: storageAccountName }
-            { name: 'LITESTREAM_SECRET_ACCESS_KEY', secretRef: 'storage-key' }
+            { name: 'LITESTREAM_AZURE_ACCOUNT_NAME', value: storageAccountName }
+            { name: 'LITESTREAM_AZURE_ACCOUNT_KEY', secretRef: 'storage-key' }
+            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', secretRef: 'appinsights-connection-string' }
+          ], empty(pbAdminEmail) ? [] : [
             { name: 'PB_ADMIN_EMAIL', secretRef: 'pb-admin-email' }
+          ], empty(pbAdminPassword) ? [] : [
             { name: 'PB_ADMIN_PASSWORD', secretRef: 'pb-admin-password' }
-          ]
-          volumeMounts: [
-            {
-              volumeName: 'pbdata'
-              mountPath: '/pb_data'
-            }
-          ]
+          ])
           probes: [
             {
               type: 'Startup'
@@ -206,13 +250,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         minReplicas: 1
         maxReplicas: 1  // SQLite is single-writer — do not scale beyond 1
       }
-      volumes: [
-        {
-          name: 'pbdata'
-          storageName: envStorage.name
-          storageType: 'AzureFile'
-        }
-      ]
     }
   }
   dependsOn: [
@@ -222,3 +259,4 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
+output customDomainVerificationId string = containerApp.properties.customDomainVerificationId

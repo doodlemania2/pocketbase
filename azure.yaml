@@ -4,7 +4,8 @@ metadata:
 services:
   pocketbase:
     host: containerapp
-    language: go
+    language: docker
     project: .
     docker:
       path: ./Dockerfile
+      remoteBuild: true
