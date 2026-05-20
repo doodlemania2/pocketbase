@@ -63,6 +63,10 @@ func bindRecordAuthApi(app core.App, rg *router.RouterGroup[*core.RequestEvent])
 		collectionPathRateLimit("", "webauthnListCredentials"),
 		RequireSameCollectionContextAuth(""),
 	)
+	sub.PATCH("/auth-with-webauthn/credentials/{credentialId}", recordWebAuthnPatchCredential).Bind(
+		collectionPathRateLimit("", "webauthnPatchCredential"),
+		RequireSameCollectionContextAuth(""),
+	)
 	sub.DELETE("/auth-with-webauthn/credentials/{credentialId}", recordWebAuthnDeleteCredential).Bind(
 		collectionPathRateLimit("", "webauthnDeleteCredential"),
 		RequireSameCollectionContextAuth(""),
@@ -71,6 +75,17 @@ func bindRecordAuthApi(app core.App, rg *router.RouterGroup[*core.RequestEvent])
 	// WebAuthn admin recovery (superuser can clear all credentials for a user)
 	sub.DELETE("/auth-with-webauthn/credentials-by-record/{id}", recordWebAuthnAdminClearCredentials).Bind(
 		RequireSuperuserAuth(),
+	)
+
+	// WebAuthn self-service recovery via emailed reset token
+	sub.POST("/request-passkey-reset", recordRequestPasskeyReset).Bind(
+		collectionPathRateLimit("", "requestPasskeyReset"),
+	)
+	sub.POST("/confirm-passkey-reset/begin", recordConfirmPasskeyResetBegin).Bind(
+		collectionPathRateLimit("", "confirmPasskeyResetBegin"),
+	)
+	sub.POST("/confirm-passkey-reset/finish", recordConfirmPasskeyResetFinish).Bind(
+		collectionPathRateLimit("", "confirmPasskeyResetFinish"),
 	)
 
 	sub.POST("/request-password-reset", recordRequestPasswordReset).Bind(
