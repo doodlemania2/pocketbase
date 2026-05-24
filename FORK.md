@@ -60,7 +60,7 @@ Containerized deployment with continuous SQLite backup:
 | `core/event_request.go` | `RequestInfoContextWebAuthn` constant |
 | `apis/record_auth.go` | 7 route bindings with middleware (rate limiting, auth) |
 | `apis/record_auth_methods.go` | `webauthn` field in auth methods response |
-| `go.mod` / `go.sum` | `go-webauthn/webauthn v0.17.3` + transitive deps |
+| `go.mod` / `go.sum` | `go-webauthn/webauthn v0.17.4` + transitive deps |
 | `core/collection_model_test.go` | Updated JSON snapshot for webauthn field |
 | `core/collection_query_test.go` | System collection count 16 → 17 |
 | `apis/collection_test.go` | `totalItems` count 16 → 17 |
@@ -106,10 +106,10 @@ See [FORK_SYNC.md](FORK_SYNC.md) for the upstream sync workflow.
 
 | Field | Value |
 |-------|-------|
-| Based on PocketBase | `master` @ `a286d28b` (v0.38.1) |
-| Last sync | 2026-05-17 |
+| Based on PocketBase | `master` @ `3616b9d6` (v0.38.2) |
+| Last sync | 2026-05-24 |
 | WebAuthn tests | All passing (WebAuthn-scoped go test) |
-| Deploy validation | `docker build` + container `/api/health` 200 OK |
+| Deploy validation | `go build ./...` clean; `docker build` + `/api/health` smoke test pass |
 
 ## Companion Packages
 
