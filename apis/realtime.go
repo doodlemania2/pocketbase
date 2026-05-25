@@ -28,6 +28,9 @@ const clientsChunkSize = 150
 // RealtimeClientAuthKey is the name of the realtime client store key that holds its auth state.
 const RealtimeClientAuthKey = "auth"
 
+// RealtimeClientIPKey is the name of the realtime client store key that holds the IP of the connected client.
+const RealtimeClientIPKey = "pbRealtimeClientIP"
+
 // bindRealtimeApi registers the realtime api endpoints.
 func bindRealtimeApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	sub := rg.Group("/realtime")
@@ -63,8 +66,12 @@ func realtimeConnect(e *core.RequestEvent) error {
 
 	connectEvent := new(core.RealtimeConnectRequestEvent)
 	connectEvent.RequestEvent = e
-	connectEvent.Client = subscriptions.NewDefaultClient()
 	connectEvent.IdleTimeout = 5 * time.Minute
+	connectEvent.MaxTimeout = 30 * time.Minute
+	connectEvent.Client = subscriptions.NewDefaultClient()
+
+	// could be used as an optional cross-reference check in other API endpoints
+	connectEvent.Client.Set(RealtimeClientIPKey, e.RealIP())
 
 	return e.App.OnRealtimeConnectRequest().Trigger(connectEvent, func(ce *core.RealtimeConnectRequestEvent) error {
 		// register new subscription client
@@ -73,7 +80,7 @@ func realtimeConnect(e *core.RequestEvent) error {
 			e.App.SubscriptionsBroker().Unregister(ce.Client.Id())
 		}()
 
-		ce.App.Logger().Debug("Realtime connection established.", slog.String("clientId", ce.Client.Id()))
+		ce.App.Logger().Debug("Realtime connection established", slog.String("clientId", ce.Client.Id()))
 
 		// signalize established connection (aka. fire "connect" message)
 		connectMsgEvent := new(core.RealtimeMessageEvent)
@@ -99,12 +106,19 @@ func realtimeConnect(e *core.RequestEvent) error {
 			return nil
 		}
 
+		// start a max lifetime timer to prevent accumulating too much
+		// connection resources and to allow the GC to run more regularly
+		maxTimer := time.NewTimer(ce.MaxTimeout)
+		defer maxTimer.Stop()
+
 		// start an idle timer to keep track of inactive/forgotten connections
 		idleTimer := time.NewTimer(ce.IdleTimeout)
 		defer idleTimer.Stop()
 
 		for {
 			select {
+			case <-maxTimer.C:
+				cancelRequest()
 			case <-idleTimer.C:
 				cancelRequest()
 			case msg, ok := <-ce.Client.Channel():
@@ -186,6 +200,21 @@ func realtimeSetSubscriptions(e *core.RequestEvent) error {
 		return e.NotFoundError("Missing or invalid client id.", err)
 	}
 
+	// for just in case to prevent someone changing a guest subscription
+	//
+	// note1: this is an extra precaution against clientId bruteforce attempts
+	// for installations allowing longer realtime connections duration
+	//
+	// note2: custom registered clients (aka. those without IP in the store)
+	// are excluded from the check for backward compatibility
+	clientIP, _ := client.Get(RealtimeClientIPKey).(string)
+	if clientIP != "" && clientIP != e.RealIP() {
+		return e.BadRequestError(
+			"Invalid realtime client.",
+			errors.New("the subscription request IP doesn't match with the realtime client IP"),
+		)
+	}
+
 	// for now allow only guest->auth upgrades and any other auth change is forbidden
 	clientAuth, _ := client.Get(RealtimeClientAuthKey).(*core.Record)
 	if clientAuth != nil && !isSameAuth(clientAuth, e.Auth) {
@@ -208,7 +237,7 @@ func realtimeSetSubscriptions(e *core.RequestEvent) error {
 		e.Client.Subscribe(e.Subscriptions...)
 
 		e.App.Logger().Debug(
-			"Realtime subscriptions updated.",
+			"Realtime subscriptions updated",
 			slog.String("clientId", e.Client.Id()),
 			slog.Any("subscriptions", e.Subscriptions),
 		)
