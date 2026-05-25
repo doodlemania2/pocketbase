@@ -250,6 +250,11 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         minReplicas: 1
         maxReplicas: 1  // SQLite is single-writer — do not scale beyond 1
       }
+      // Give the entrypoint enough time on SIGTERM to drain pocketbase, let
+      // SQLite checkpoint the WAL, then have Litestream replicate the final
+      // frames to the blob replica before the container is killed. Default is
+      // 30s which is tight; 60s gives comfortable headroom.
+      terminationGracePeriodSeconds: 60
     }
   }
   dependsOn: [
