@@ -19,8 +19,11 @@ param containerRegistryLoginServer string
 @description('ACR name')
 param containerRegistryName string
 
-@description('Storage account name for the pbdata file share (and reserved for future blob-based PocketBase backups)')
+@description('Storage account name hosting the NFS pbdata file share')
 param storageAccountName string
+
+@description('Resource ID of the VNet subnet that the Container Apps environment runs in. Required for NFS Azure Files mounts.')
+param subnetId string
 
 @description('PocketBase admin email')
 @secure()
@@ -63,24 +66,8 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 }
 
 // Reference existing resources
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: storageAccountName
-}
-
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: containerRegistryName
-}
-
-// RBAC: Storage Blob Data Contributor for Litestream backups
-var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-resource blobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, identity.id, storageBlobDataContributorRoleId)
-  scope: storageAccount
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
 }
 
 // RBAC: ACR Pull for container image access
@@ -95,7 +82,9 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-// Container Apps Environment - logs stream to the shared central Log Analytics workspace
+// Container Apps Environment - VNet-integrated workload-profile env so NFS Azure Files mounts work.
+// vnetConfiguration.infrastructureSubnetId cannot be changed after the env is created; recreating
+// the env requires deleting the old one first (or using a new env name) and reissuing the managed cert.
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
   location: location
@@ -114,29 +103,22 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
         workloadProfileType: 'Consumption'
       }
     ]
+    vnetConfiguration: {
+      infrastructureSubnetId: subnetId
+      internal: false
+    }
   }
 }
 
-// /pb_data is mounted from an Azure Files share so it survives pod restarts and
-// PocketBase's in-process restart (used by the dashboard backup-restore flow).
-// Litestream is intentionally NOT configured: with persistent storage the data
-// is already durable, and Litestream is incompatible with PB's syscall.Exec
-// self-restart (the running litestream process keeps an FD on the pre-restart
-// inode, so only ghost snapshots reach the blob replica). The binary and
-// /etc/litestream.yml are still baked into the image; setting
-// LITESTREAM_REPLICA_URL re-enables it via entrypoint.sh if ever needed.
-var storageAccountKey = storageAccount.listKeys().keys[0].value
-
-// Env-level storage handle pointing at the existing 'pbdata' file share. The
-// container template references this by name in `template.volumes`.
-resource pbdataEnvStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+// /pb_data is mounted from a Premium FileStorage NFS share. NFS honors POSIX byte-range
+// locks, which SQLite needs for WAL mode — SMB does not, hence the previous SQLITE_BUSY crash loop.
+resource pbdataEnvStorage 'Microsoft.App/managedEnvironments/storages@2025-07-01' = {
   parent: environment
   name: 'pbdata'
   properties: {
-    azureFile: {
-      accountName: storageAccountName
-      accountKey: storageAccountKey
-      shareName: 'pbdata'
+    nfsAzureFile: {
+      server: '${storageAccountName}.file.${az.environment().suffixes.storage}'
+      shareName: '/${storageAccountName}/pbdata'
       accessMode: 'ReadWrite'
     }
   }
@@ -175,7 +157,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     configuration: {
       activeRevisionsMode: 'Single'
       secrets: concat([
-        { name: 'storage-key', value: storageAccountKey }
         { name: 'appinsights-connection-string', value: appInsightsConnectionString }
       ], empty(pbAdminEmail) ? [] : [
         { name: 'pb-admin-email', value: pbAdminEmail }
@@ -232,7 +213,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               }
               initialDelaySeconds: 5
               periodSeconds: 3
-              failureThreshold: 30  // Allow up to ~90s for Litestream restore + PocketBase bootstrap
+              failureThreshold: 30
               timeoutSeconds: 3
             }
             {
@@ -269,7 +250,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       volumes: [
         {
           name: 'pbdata'
-          storageType: 'AzureFile'
+          storageType: 'NfsAzureFile'
           storageName: pbdataEnvStorage.name
         }
       ]
@@ -277,16 +258,13 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         minReplicas: 1
         maxReplicas: 1  // SQLite is single-writer — do not scale beyond 1
       }
-      // Give the entrypoint enough time on SIGTERM to drain pocketbase, let
-      // SQLite checkpoint the WAL, then have Litestream replicate the final
-      // frames to the blob replica before the container is killed. Default is
-      // 30s which is tight; 60s gives comfortable headroom.
+      // 60s grace period gives PocketBase time to drain in-flight requests and
+      // SQLite time to checkpoint the WAL on SIGTERM before the container is killed.
       terminationGracePeriodSeconds: 60
     }
   }
   dependsOn: [
     acrRoleAssignment
-    blobRoleAssignment
   ]
 }
 
