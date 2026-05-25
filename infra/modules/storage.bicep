@@ -3,6 +3,7 @@
 //   - sku Premium_LRS + kind FileStorage (Standard tier does not support NFS)
 //   - The mounting subnet has a Microsoft.Storage service endpoint
 //   - networkAcls denies by default and explicitly allows the subnet
+//   - supportsHttpsTrafficOnly = false (NFS is unencrypted; HTTPS-only rejects the mount)
 //   - Share enabledProtocols = NFS with no root squash so the container UID can write
 
 @description('Storage account name (must be globally unique, 3-24 lowercase alphanumeric)')
@@ -33,7 +34,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'FileStorage'
   properties: {
     minimumTlsVersion: 'TLS1_2'
-    supportsHttpsTrafficOnly: true
+    supportsHttpsTrafficOnly: false
     allowBlobPublicAccess: false
     publicNetworkAccess: 'Enabled'
     networkAcls: {
