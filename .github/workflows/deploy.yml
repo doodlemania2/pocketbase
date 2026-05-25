@@ -42,11 +42,13 @@ jobs:
           SHARED_LAW_NAME: ${{ vars.SHARED_LAW_NAME }}
           SHARED_OBS_RG: ${{ vars.SHARED_OBS_RG }}
           AZURE_RG_NAME: ${{ vars.AZURE_RG_NAME }}
-          AZURE_STORAGE_NAME: ${{ vars.AZURE_STORAGE_NAME }}
-          # Custom domain binding. Phase 1 (BIND_CERT=false) adds the hostname
-          # with bindingType=Disabled so the managed-cert provisioner can validate.
-          # Phase 2 (BIND_CERT=true) issues the free Azure-managed TLS cert and
-          # flips the binding to SniEnabled. The cert resource is idempotent — its
-          # name is derived from CUSTOM_DOMAIN, so re-runs are no-ops.
-          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'auth.stfoafrisco.org' }}
-          BIND_CERT: ${{ vars.BIND_CERT || 'true' }}
+          # Custom domain binding is staged across three deploys to handle the
+          # asuid TXT validation chicken-and-egg: Phase 1 leaves CUSTOM_DOMAIN
+          # unset so the env is created and customDomainVerificationId is
+          # surfaced for the DNS update. Phase 2 sets CUSTOM_DOMAIN with
+          # BIND_CERT=false so the hostname is added with bindingType=Disabled.
+          # Phase 3 flips BIND_CERT=true to issue the managed cert and switch
+          # the binding to SniEnabled. Defaults are intentionally empty — set
+          # the repo variables explicitly per phase.
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+          BIND_CERT: ${{ vars.BIND_CERT }}
