@@ -38,3 +38,6 @@ jobs:
           AZD_INITIAL_ENVIRONMENT_CONFIG: ${{ secrets.AZD_INITIAL_ENVIRONMENT_CONFIG }}
           PB_ADMIN_EMAIL: ${{ secrets.PB_ADMIN_EMAIL }}
           PB_ADMIN_PASSWORD: ${{ secrets.PB_ADMIN_PASSWORD }}
+          SHARED_AI_NAME: ${{ vars.SHARED_AI_NAME }}
+          SHARED_LAW_NAME: ${{ vars.SHARED_LAW_NAME }}
+          SHARED_OBS_RG: ${{ vars.SHARED_OBS_RG }}
