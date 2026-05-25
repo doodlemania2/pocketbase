@@ -19,11 +19,8 @@ param containerRegistryLoginServer string
 @description('ACR name')
 param containerRegistryName string
 
-@description('Storage account name for Litestream blob backups')
+@description('Storage account name for the pbdata file share (and reserved for future blob-based PocketBase backups)')
 param storageAccountName string
-
-@description('Blob container name for Litestream backups')
-param blobContainerName string
 
 @description('PocketBase admin email')
 @secure()
@@ -120,10 +117,30 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-// Azure Files storage mount removed — SQLite locking is unreliable over SMB-mounted Azure Files.
-// /pb_data lives on the container's ephemeral writable layer; durability is provided by Litestream
-// replication to the blob container (restored on every container start via entrypoint.sh).
+// /pb_data is mounted from an Azure Files share so it survives pod restarts and
+// PocketBase's in-process restart (used by the dashboard backup-restore flow).
+// Litestream is intentionally NOT configured: with persistent storage the data
+// is already durable, and Litestream is incompatible with PB's syscall.Exec
+// self-restart (the running litestream process keeps an FD on the pre-restart
+// inode, so only ghost snapshots reach the blob replica). The binary and
+// /etc/litestream.yml are still baked into the image; setting
+// LITESTREAM_REPLICA_URL re-enables it via entrypoint.sh if ever needed.
 var storageAccountKey = storageAccount.listKeys().keys[0].value
+
+// Env-level storage handle pointing at the existing 'pbdata' file share. The
+// container template references this by name in `template.volumes`.
+resource pbdataEnvStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+  parent: environment
+  name: 'pbdata'
+  properties: {
+    azureFile: {
+      accountName: storageAccountName
+      accountKey: storageAccountKey
+      shareName: 'pbdata'
+      accessMode: 'ReadWrite'
+    }
+  }
+}
 
 // Free Azure-managed TLS certificate for the custom domain (Phase 2 only).
 // Container Apps requires the hostname to be present on a container app in the environment
@@ -200,9 +217,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: concat([
             { name: 'PB_HOST', value: '0.0.0.0' }
             { name: 'PB_PORT', value: '8090' }
-            { name: 'LITESTREAM_REPLICA_URL', value: 'abs://${blobContainerName}' }
-            { name: 'LITESTREAM_AZURE_ACCOUNT_NAME', value: storageAccountName }
-            { name: 'LITESTREAM_AZURE_ACCOUNT_KEY', secretRef: 'storage-key' }
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', secretRef: 'appinsights-connection-string' }
           ], empty(pbAdminEmail) ? [] : [
             { name: 'PB_ADMIN_EMAIL', secretRef: 'pb-admin-email' }
@@ -244,6 +258,19 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               timeoutSeconds: 5
             }
           ]
+          volumeMounts: [
+            {
+              volumeName: 'pbdata'
+              mountPath: '/pb_data'
+            }
+          ]
+        }
+      ]
+      volumes: [
+        {
+          name: 'pbdata'
+          storageType: 'AzureFile'
+          storageName: pbdataEnvStorage.name
         }
       ]
       scale: {

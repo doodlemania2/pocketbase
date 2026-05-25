@@ -104,7 +104,6 @@ module containerApp 'modules/container-app.bicep' = {
     containerRegistryLoginServer: acr.outputs.loginServer
     containerRegistryName: acr.outputs.name
     storageAccountName: storage.outputs.storageAccountName
-    blobContainerName: storage.outputs.blobContainerName
     pbAdminEmail: pbAdminEmail
     pbAdminPassword: pbAdminPassword
     logAnalyticsWorkspaceId: sharedLaw.id
