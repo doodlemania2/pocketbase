@@ -106,10 +106,17 @@ See [FORK_SYNC.md](FORK_SYNC.md) for the upstream sync workflow.
 
 | Field | Value |
 |-------|-------|
-| Based on PocketBase | `master` @ `3616b9d6` (v0.38.2) |
-| Last sync | 2026-05-24 |
+| Based on PocketBase | `master` @ `aeb78e51` (v0.39.0) |
+| Last sync | 2026-05-28 |
 | WebAuthn tests | All passing (WebAuthn-scoped go test) |
-| Deploy validation | `go build ./...` clean; `docker build` + `/api/health` smoke test pass |
+| Deploy validation | `go build ./...` clean; full `go test ./...` clean (3 pre-existing upstream flakes allowlisted); `docker build` + `/api/health` smoke test pass |
+
+### Sync history
+
+| Date | Upstream tip | PB version | Notes |
+|------|--------------|------------|-------|
+| 2026-05-28 | `aeb78e51` | v0.39.0 | Added `PasskeyResetToken` to upstream auth options; re-applied redaction in `core/collection_model.go`. WebAuthn lib unchanged at v0.17.4. |
+| 2026-05-24 | `3616b9d6` | v0.38.2 | Initial documented sync. |
 
 ## Companion Packages
 
