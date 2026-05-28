@@ -149,11 +149,14 @@ docker stop pb-sync-smoke
 of our changes and are pre-existing in upstream PocketBase. Treat them as ignored
 unless `make test` reports OTHER failures:
 
-| Test | Cause |
-|------|-------|
-| `core/TestSQLRun/single_write_query` | `modernc.org/sqlite` driver returns `affectedRows=0` instead of expected `1`. Pre-existing in v0.39.0. |
-| `core/TestNotifyWatcher_CollectionsUpdate` | `fsnotify` flake on macOS — duplicate WRITE events. |
-| `core/TestNotifyWatcher_SettingsUpdate` | Same `fsnotify`/macOS flake. |
+| Test                                       | Cause                                                |
+|--------------------------------------------|------------------------------------------------------|
+| `core/TestNotifyWatcher_CollectionsUpdate` | `fsnotify` flake on macOS — duplicate WRITE events.  |
+| `core/TestNotifyWatcher_SettingsUpdate`    | Same `fsnotify`/macOS flake.                         |
+
+Resolved driver-difference patch (do not revert during upstream sync):
+
+- `apis/TestSQLRun/single_write_query` expects `affectedRows:1` for `CREATE TABLE` because `modernc.org/sqlite` reports 1 for DDL while upstream's `mattn/sqlite` reports 0.
 
 If a NEW test starts failing after a rebase, fix it before pushing. Pay particular
 attention to `core/TestCollectionModelMarshalJSON` and any `Marshal*` test — these
