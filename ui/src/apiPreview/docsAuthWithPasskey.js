@@ -19,8 +19,8 @@ export function docsAuthWithPasskey(collection) {
         // description
         t.p(
             null,
-            `Register and authenticate ${collection.name} records using WebAuthn-based passkeys ` +
-                `(platform authenticators, hardware keys, etc.).`,
+            `Register and authenticate ${collection.name} records using WebAuthn-based passkeys `
+                + `(platform authenticators, hardware keys, etc.).`,
         ),
         t.p(
             null,
@@ -297,7 +297,10 @@ function login(collection) {
         t.p(
             { className: "txt-hint" },
             "Body: ",
-            t.code(null, "{ identity, sessionToken, id, rawId, type, response: { authenticatorData, clientDataJSON, signature, userHandle } }"),
+            t.code(
+                null,
+                "{ identity, sessionToken, id, rawId, type, response: { authenticatorData, clientDataJSON, signature, userHandle } }",
+            ),
             ". On success returns the standard auth response ",
             t.code(null, "{ token, record }"),
             ".",
@@ -325,7 +328,7 @@ function manage(collection) {
         t.p(
             { className: "txt-hint" },
             "Renames a passkey. Body: ",
-            t.code(null, '{ "name": "..." }'),
+            t.code(null, "{ \"name\": \"...\" }"),
             ".",
         ),
         t.div(
