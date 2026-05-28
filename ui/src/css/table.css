@@ -317,8 +317,21 @@ table {
         min-width: 900px;
         border-radius: 0;
     }
-    tr {
-        animation: fadeIn var(--animationSpeed);
+    table > :first-child > tr:first-child {
+        > :first-child {
+            border-top-left-radius: 0;
+        }
+        > :last-child {
+            border-top-right-radius: 0;
+        }
+    }
+    table > :last-child > tr:last-child {
+        > :first-child {
+            border-bottom-left-radius: 0;
+        }
+        > :last-child {
+            border-bottom-right-radius: 0;
+        }
     }
     td,
     th {
@@ -342,6 +355,7 @@ table {
         td,
         th {
             height: 59px;
+            border-radius: 0;
         }
     }
 
@@ -403,9 +417,6 @@ table {
         }
         .col-copy {
             display: none;
-        }
-        .label {
-            word-break: break-word;
         }
         td,
         th {

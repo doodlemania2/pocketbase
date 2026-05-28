@@ -115,6 +115,13 @@ window.app.store = store({
                 label: "Import collections",
             },
         ],
+        Debug: [
+            {
+                href: "#/settings/sql",
+                icon: "ri-terminal-box-line",
+                label: "SQL console",
+            },
+        ],
     },
 
     predefinedAccentColors: [
@@ -205,7 +212,7 @@ window.app.store = store({
     addOrUpdateCollection(collection) {
         const index = app.store.collections.findIndex((c) => c.id == collection.id);
         if (index >= 0) {
-            if (app.store.activeCollection.id == collection.id) {
+            if (app.store.activeCollection?.id == collection.id) {
                 app.store._activeCollectionIdOrName = collection.id;
             }
 
@@ -223,8 +230,7 @@ window.app.store = store({
         app.store.isLoadingOAuth2Providers = true;
 
         try {
-            // @todo replace with SDK call
-            app.store.oauth2Providers = await app.pb.send("/api/collections/meta/oauth2-providers");
+            app.store.oauth2Providers = await app.pb.collections.getAllOAuth2Providers();
             app.store.isLoadingOAuth2Providers = false;
         } catch (err) {
             if (!err.isAbort) {

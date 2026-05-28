@@ -919,6 +919,7 @@ hr {
 .alert {
     display: block;
     width: 100%;
+    flex-shrink: 0;
     align-content: center;
     min-height: var(--lgBtnHeight);
     padding: max(5px, calc(var(--inputPadding) - 5px)) max(10px, var(--inputPadding));
@@ -975,7 +976,7 @@ hr {
     min-width: 0;
     min-height: 25px;
     font-weight: normal;
-    word-break: normal;
+    word-break: break-word;
     text-decoration: none;
     font-size: var(--smFontSize);
     line-height: calc(var(--smFontSize) + 2px);

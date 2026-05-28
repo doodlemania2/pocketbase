@@ -2,19 +2,26 @@
 
 **Keep in mind that PocketBase is a non-commercial open source project, maintained entirely on volunteer basis (there is no company or dedicated team behind it), and there are no bounties!**
 
-If you discover a security vulnerability within PocketBase, please send an e-mail to **support at pocketbase.io** or submit a private [GitHub Security advisory](https://github.com/pocketbase/pocketbase/security/advisories).
+If you want to responsible report a security issue you'll have to reach out as a human to **support at pocketbase.io**.
 
-I try to be as responsive as possible and usually address security reports within a day or two, but if you didn't receive a reply from me for more than 5 days it is very likely that your email was flagged and in that case please open a GitHub issue or discussion just mentioning that you found a vulnerability and want to report it so that I can see the notification and will try to contact you for more details.
+This means:
+- no overconfident and arrogant tone
+- no threatening deadlines
+- no requirement for me to login in your security platform just to read the report
+- no inflated severity (we can discuss the CVSS score after confirming the issue)
+- no LLMs usage as part of your report description or followup communication
 
-In case the vulnerability is confirmed, within another couple days I'll try to submit a fix, GitHub security advisory and CVE with remediation steps and **minimal details** regarding the found exploit to minimize giving too much hints to malicious actors (you'll be credited both in the fix release notes and in the public report).
+Reports that don't follow the above will NOT be reviewed no matter of their validity _(you are of course free to publish whatever you want; see also [#7718](https://github.com/pocketbase/pocketbase/discussions/7718))_.
 
-### Please:
+**Or in other words - a simple _"Hey I think I found a security issue when I do X"_ is enough.**
 
-- DO NOT use LLM as part of your report or email communication - it is extremely frustrating to spend an hour or more reading a wall of generated text, writing an elaborate reply and then to receive another generic LLM prompt response in return.
+I try to be as responsive as possible and usually address security issues within couple days but if you didn't receive a reply from me for more than a week it is very likely that your email was flagged and in that case please open a GitHub issue or discussion just mentioning that you found a vulnerability and want to report it so that I can see the notification and will try to contact you for more details.
 
-- DO NOT reserve and publish MITRE CVE number on your own _(I prefer to do it through the GitHub Security advisory)_ and try to communicate first privately the details to better understand how the code is being used and whether the supposed vulnerability can be actually exploited in any real practical scenarios. Otherwise you are risking needlessly causing scaremongering and annoyance for users that rely on security scanners as part of their CI/CD pipeline.
+In case the vulnerability is confirmed:
 
-- Wait before publicly disclosing and sharing details about the found vulnerability, **ideally at least 5 days after the fix**, to make it harder to exploit and give enough time for users to patch their instances _(you are free to provide a PoC and as much details as you want in your own blog/gist/etc.)_.
+- I'll start working on a local fix.
+- Once the fix is implemented locally, I'll publish a pre-announcement with a scheduled release date _(and when possible an approximate release time)_.
+- After the release, I'll publish a GitHub security advisory and CVE with remediation steps and **minimal** details regarding the found exploit _(you are free to publish PoC and more details in your own blog, gist, etc. but it is advised to wait at least a week after the release to allow enough time for people to patch their instances before making it more publicly known)_.
 
 ### Below is a short list of previous reports that are NOT considered security issues:
 
@@ -82,6 +89,14 @@ Some endpoints, like the user create/register, can be used for usernames or emai
 In many places where applicable we've tried to minimize the impact by using constant time checks, returning non-descriptive error messages, applying an internal rate limit for some operations, etc. but it is not bulletproof and if somebody wants to find out if a user is registered they will be able to do it one way or another.
 
 If you think that there is a place where we can improve the handling without hurting too much the user experience, feel free to open a regular public issue and it will be considered.
+</details>
+
+<details>
+<summary><strong>Attack-vectors relying on social engineering</strong></summary>
+
+Reports for attacks relying on various social engineering tactics _(e.g. tricking someone to click on a link)_ are valid concerns but usually out of the security scope of the project as there are a lot of cases where the APIs are deliberately designed for minimal friction.
+
+If you have concerns for such attack, feel free to open a regular public issue and we can eventually try to reconsider adding extra guards when feasible _(or at least properly document the existing behavior)_.
 </details>
 
 <details>

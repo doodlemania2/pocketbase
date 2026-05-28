@@ -48,6 +48,8 @@ var abbrs = {
   containerApp: 'ca'
   containerRegistry: 'cr'
   managedIdentity: 'id'
+  virtualNetwork: 'vnet'
+  subnet: 'snet-aca'
 }
 
 var resourceToken = uniqueString(subscription().subscriptionId, environmentName, location)
@@ -82,6 +84,16 @@ module acr 'modules/acr.bicep' = {
   }
 }
 
+module network 'modules/network.bicep' = {
+  name: 'network'
+  scope: rg
+  params: {
+    vnetName: '${abbrs.virtualNetwork}-${environmentName}'
+    subnetName: abbrs.subnet
+    location: location
+  }
+}
+
 module storage 'modules/storage.bicep' = {
   name: 'storage'
   scope: rg
@@ -89,6 +101,7 @@ module storage 'modules/storage.bicep' = {
     name: storageAccountName
     location: location
     tags: tags
+    subnetId: network.outputs.subnetId
   }
 }
 
@@ -104,7 +117,7 @@ module containerApp 'modules/container-app.bicep' = {
     containerRegistryLoginServer: acr.outputs.loginServer
     containerRegistryName: acr.outputs.name
     storageAccountName: storage.outputs.storageAccountName
-    blobContainerName: storage.outputs.blobContainerName
+    subnetId: network.outputs.subnetId
     pbAdminEmail: pbAdminEmail
     pbAdminPassword: pbAdminPassword
     logAnalyticsWorkspaceId: sharedLaw.id

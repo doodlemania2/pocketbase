@@ -34,9 +34,6 @@
     },
     "resourceGroupName": {
       "value": "${AZURE_RG_NAME=rg-${AZURE_ENV_NAME}}"
-    },
-    "storageAccountName": {
-      "value": "${AZURE_STORAGE_NAME}"
     }
   }
 }

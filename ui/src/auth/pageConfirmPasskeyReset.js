@@ -75,10 +75,9 @@ export function pageConfirmPasskeyReset(route) {
         data.isSubmitting = true;
 
         try {
-            const basePath =
-                client.baseURL.replace(/\/+$/, "") +
-                "/api/collections/" +
-                encodeURIComponent(tokenPayload.collectionId);
+            const basePath = client.baseURL.replace(/\/+$/, "")
+                + "/api/collections/"
+                + encodeURIComponent(tokenPayload.collectionId);
 
             // begin
             const beginRes = await fetch(basePath + "/confirm-passkey-reset/begin", {

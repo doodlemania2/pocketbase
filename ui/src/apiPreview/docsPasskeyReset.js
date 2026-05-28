@@ -125,7 +125,7 @@ function confirm(collection) {
         t.p(
             { className: "txt-hint" },
             "Body: ",
-            t.code(null, '{ "token": "RESET_TOKEN" }'),
+            t.code(null, "{ \"token\": \"RESET_TOKEN\" }"),
             ". Returns ",
             t.code(null, "{ options, sessionToken }"),
             " — use ",

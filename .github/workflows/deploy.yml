@@ -38,3 +38,17 @@ jobs:
           AZD_INITIAL_ENVIRONMENT_CONFIG: ${{ secrets.AZD_INITIAL_ENVIRONMENT_CONFIG }}
           PB_ADMIN_EMAIL: ${{ secrets.PB_ADMIN_EMAIL }}
           PB_ADMIN_PASSWORD: ${{ secrets.PB_ADMIN_PASSWORD }}
+          SHARED_AI_NAME: ${{ vars.SHARED_AI_NAME }}
+          SHARED_LAW_NAME: ${{ vars.SHARED_LAW_NAME }}
+          SHARED_OBS_RG: ${{ vars.SHARED_OBS_RG }}
+          AZURE_RG_NAME: ${{ vars.AZURE_RG_NAME }}
+          # Custom domain binding is staged across three deploys to handle the
+          # asuid TXT validation chicken-and-egg: Phase 1 leaves CUSTOM_DOMAIN
+          # unset so the env is created and customDomainVerificationId is
+          # surfaced for the DNS update. Phase 2 sets CUSTOM_DOMAIN with
+          # BIND_CERT=false so the hostname is added with bindingType=Disabled.
+          # Phase 3 flips BIND_CERT=true to issue the managed cert and switch
+          # the binding to SniEnabled. Defaults are intentionally empty — set
+          # the repo variables explicitly per phase.
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+          BIND_CERT: ${{ vars.BIND_CERT }}
