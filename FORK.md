@@ -106,15 +106,16 @@ See [FORK_SYNC.md](FORK_SYNC.md) for the upstream sync workflow.
 
 | Field | Value |
 |-------|-------|
-| Based on PocketBase | `master` @ `aeb78e51` (v0.39.0) |
-| Last sync | 2026-05-28 |
+| Based on PocketBase | `master` @ `5631d9b1` (v0.39.1) |
+| Last sync | 2026-06-06 |
 | WebAuthn tests | All passing (WebAuthn-scoped go test) |
-| Deploy validation | `go build ./...` clean; full `go test ./...` clean (3 pre-existing upstream flakes allowlisted); `docker build` + `/api/health` smoke test pass |
+| Deploy validation | `go build ./...` clean; full `go test ./...` clean (1 pre-existing upstream flake — `TestNotifyWatcher_SettingsUpdate`, fails on pristine v0.39.1 too); `docker build` + `/api/health` smoke test pass |
 
 ### Sync history
 
 | Date | Upstream tip | PB version | Notes |
 |------|--------------|------------|-------|
+| 2026-06-06 | `5631d9b1` | v0.39.1 | Rebased feat branch onto v0.39.1 (11 upstream commits). `ui/dist` regenerated via vite. `deploy/azure` rebuilt as a clean linear delta on top of feat (collapsed prior tangled merge history). WebAuthn lib unchanged at v0.17.4. |
 | 2026-05-28 | `aeb78e51` | v0.39.0 | Added `PasskeyResetToken` to upstream auth options; re-applied redaction in `core/collection_model.go`. WebAuthn lib unchanged at v0.17.4. |
 | 2026-05-24 | `3616b9d6` | v0.38.2 | Initial documented sync. |
 
