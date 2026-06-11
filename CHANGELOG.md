@@ -1,3 +1,27 @@
+## v0.39.3
+
+- Fixed JS error on `file` settings `maxSelect` change ([#7731](https://github.com/pocketbase/pocketbase/issues/7731)).
+
+- Apply the `Ctrl+S` record panel save shortcut only if it is the current top open modal.
+
+- Fixed `number` settings validator to not ignore 0 `max` value.
+
+- Normalized field settings validation error messages and tooltips.
+
+
+## v0.39.2
+
+- Fixed records list UI sorting ([#7724](https://github.com/pocketbase/pocketbase/issues/7724)).
+
+- Don't clear the date input on invalid value while still typing ([#7726](https://github.com/pocketbase/pocketbase/issues/7726)).
+
+- Return `filepath.SkipDir` in the `pb_hooks` dirs watcher to avoid unnecessary iterating over `node_modules` and `.*` prefixed hidden dirs (`.DS_Store`, `.git`, etc.).
+
+- Show the "Affected rows" SQL console message only if non-empty to avoid ambiguity with drivers that don't support returning the affected rows count.
+
+- Updated `modernc.org/sqlite` to v1.52.0 ([SQLite 3.53.2](https://sqlite.org/src/timeline?from=version-3.53.0&to=version-3.53.2&to2=branch-3.53&y=ci)).
+
+
 ## v0.39.1
 
 - Fixed multiple select options wrapping ([#7720](https://github.com/pocketbase/pocketbase/issues/7720)).

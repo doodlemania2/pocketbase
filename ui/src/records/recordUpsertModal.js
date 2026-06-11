@@ -422,7 +422,11 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
                         inert: () => data.isLoading || data.isSaving,
                         onmount: (el) => {
                             el._quickSaveHandler = (e) => {
-                                if ((e.ctrlKey || e.metaKey) && e.code == "KeyS") {
+                                if (
+                                    (e.ctrlKey || e.metaKey)
+                                    && e.code == "KeyS"
+                                    && app.modals.getTop() === el?.closest(".modal")
+                                ) {
                                     e.preventDefault();
                                     save(false);
                                 }
@@ -431,7 +435,7 @@ function recordUpsertModal(collection, rawRecord, modalSettings) {
                         },
                         onunmount: (el) => {
                             if (el?._quickSaveHandler) {
-                                window.removeEventListener("keydown", el?._quickSaveHandler);
+                                window.removeEventListener("keydown", el._quickSaveHandler);
                             }
                         },
                     },
