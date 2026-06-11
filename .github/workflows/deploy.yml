@@ -19,7 +19,7 @@ jobs:
       AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install azd
         uses: Azure/setup-azd@v2
