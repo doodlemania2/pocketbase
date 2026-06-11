@@ -9,7 +9,7 @@ A fork of PocketBase (Go backend with embedded SQLite, realtime subscriptions, f
 1. **WebAuthn/Passkey auth** (`feat/webauthn-passkey-support` branch)
 2. **Docker + Azure Container Apps deployment** (`deploy/azure` branch — Dockerfile, `entrypoint.sh`, `litestream.yml`, `infra/` Bicep, `azure.yaml`, `DEPLOY.md`)
 
-`master` is the fork default branch, produced by merging `deploy/azure` after each upstream sync. See `FORK.md` for current sync status and `FORK_SYNC.md` for the full sync runbook.
+`master` is the fork default branch, produced by merging `deploy/azure` after each upstream sync. See `FORK_SYNC.md` for the full sync runbook and current sync status.
 
 ## Commands
 
@@ -73,7 +73,7 @@ API tests are table-driven `tests.ApiScenario` slices (method, URL, body, auth h
 ## Fork maintenance (critical)
 
 - **Remotes**: `origin` = doodlemania2/pocketbase (push), `upstream` = pocketbase/pocketbase (fetch only).
-- **Branch stack**: `upstream/master` → rebase `feat/webauthn-passkey-support` → rebuild `deploy/azure` on top → merge into `master`. `deploy/azure` is **not cleanly rebasable** — it is rebuilt by replaying its delta as a patch onto the fresh WebAuthn tip (FORK_SYNC.md Step 4). Linear history, force-push with `--force-with-lease`. Full procedure in `FORK_SYNC.md`; update `FORK.md` after each sync.
+- **Branch stack**: `upstream/master` → rebase `feat/webauthn-passkey-support` → rebuild `deploy/azure` on top → merge into `master`. `deploy/azure` is **not cleanly rebasable** — it is rebuilt by replaying its delta as a patch onto the fresh WebAuthn tip (FORK_SYNC.md Step 4). Linear history, force-push with `--force-with-lease`. Full procedure in `FORK_SYNC.md`; update its Sync Status section after each sync.
 - **Token redaction pitfall**: `core/collection_model.go` `MarshalJSON` must blank the `Secret` of every `*ResetToken`-style auth token config. When upstream adds a new token type (e.g. `PasskeyResetToken` in v0.39.0), the rebase silently drops the redaction — re-add `alias.X.Secret = ""` or the secret leaks via the API.
 - **modernc vs mattn divergence**: `apis/TestSQLRun/single_write_query` expects affected-rows = 1 for DDL under modernc (upstream's mattn reports 0). Keep the fork's value of 1 when the test conflicts on rebase.
 - **Known flaky tests on macOS**: `core/TestNotifyWatcher_CollectionsUpdate` and `core/TestNotifyWatcher_SettingsUpdate` (fsnotify duplicate WRITE events) — not fork regressions.

@@ -52,7 +52,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 title: `Upstream sync: PocketBase ${version} available`,
-                body: `A new PocketBase release [${version}](https://github.com/pocketbase/pocketbase/releases/tag/${version}) is available.\n\n## Sync Steps\n\nSee [FORK_SYNC.md](./FORK_SYNC.md) for the full workflow.\n\n1. \`git fetch upstream\`\n2. Rebase \`feat/webauthn-passkey-support\` onto \`upstream/master\`\n3. \`make test\`\n4. Rebase \`deploy/azure\` onto updated webauthn branch\n5. \`make test && docker build\`\n6. Update FORK.md sync status`,
+                body: `A new PocketBase release [${version}](https://github.com/pocketbase/pocketbase/releases/tag/${version}) is available.\n\n## Sync Steps\n\nSee [FORK_SYNC.md](./FORK_SYNC.md) for the full workflow.\n\n1. \`git fetch upstream\`\n2. Rebase \`feat/webauthn-passkey-support\` onto \`upstream/master\`\n3. \`make test\`\n4. Rebase \`deploy/azure\` onto updated webauthn branch\n5. \`make test && docker build\`\n6. Update the Sync Status section in FORK_SYNC.md`,
                 labels: ['upstream-sync'],
               });
             }

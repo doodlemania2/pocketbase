@@ -2,6 +2,24 @@
 
 How to keep this fork in sync with upstream PocketBase releases.
 
+## Sync Status
+
+**Current:** synced to upstream **v0.39.3** (`465cfb52`) on 2026-06-11.
+WebAuthn library `go-webauthn/webauthn` **v0.17.4**; `modernc.org/sqlite` **v1.52.0**.
+Tests: full `go test ./...` green on `feat/webauthn-passkey-support` and
+`deploy/azure` (the known macOS `fsnotify` flakes
+`TestNotifyWatcher_CollectionsUpdate` / `TestNotifyWatcher_SettingsUpdate` are
+ignored; the Docker build/health-check smoke test runs in CI).
+
+| Synced to | Date | WebAuthn | Notes |
+| --- | --- | --- | --- |
+| v0.39.3 (`465cfb52`) | 2026-06-11 | v0.17.4 | modernc 1.51→1.52; upstream field-settings UI refactor, number `0`-max validator fix, extra SQL write keywords, cron panic-recover. `feat`/`deploy/azure` had drifted behind `master` at v0.39.0 — rebuilt by sourcing the fork delta from `master` to avoid regression. |
+| v0.39.1 (`5631d9b1`) | 2026-06-07 | v0.17.4 | Prior production deploy to Azure. |
+| v0.39.0 (`aeb78e51`) | 2026-05 | v0.17.4 | `PasskeyResetToken` secret redaction re-added. |
+
+> The old standalone `FORK.md` status page was removed; sync status now lives in
+> this section.
+
 ## Prerequisites
 
 This clone uses the **conventional** remote layout:
@@ -117,8 +135,8 @@ If a newer version is available:
 
 4. Commit as `deps(webauthn): bump go-webauthn/webauthn vA -> vB` with the
    relevant release notes summarized in the body.
-5. Update the version reference in `FORK.md` ("Modified Files" table) and
-   `WEBAUTHN_PLAN.md` (status table) to match.
+5. Update the WebAuthn version in the **Sync Status** section at the top of this
+   file to match.
 
 ### Step 4: Rebuild deploy branch onto updated WebAuthn
 
@@ -206,17 +224,17 @@ If a NEW test starts failing after a rebase, fix it before pushing. Pay particul
 attention to `core/TestCollectionModelMarshalJSON` and any `Marshal*` test — these
 catch missing secret-redaction (see Step 2's HIGH risk row).
 
-### Step 6: Update FORK.md
+### Step 6: Update the Sync Status section
 
-Update the "Upstream Sync Status" table in `FORK.md` with:
+Update the **Sync Status** section at the top of this file (`FORK_SYNC.md`) with:
 
-- The PocketBase version/commit you synced to (e.g. `aeb78e51` / v0.39.0)
+- The PocketBase version/commit you synced to (e.g. `465cfb52` / v0.39.3)
 - Today's date
 - Test status (including any allowlisted flakes)
 
-Also add a new row to the "Sync history" table immediately below it, noting any
-non-trivial upstream additions (new auth option fields, new tokens, etc.) that
-required fork-side follow-up.
+Also add a new row to the sync-history table, noting any non-trivial upstream
+additions (new auth option fields, new tokens, etc.) that required fork-side
+follow-up.
 
 ## Pre-Rebase Checklist
 
@@ -231,7 +249,7 @@ required fork-side follow-up.
 - [ ] `docker build` succeeds on `deploy/azure`
 - [ ] Health check passes on built container
 - [ ] WebAuthn endpoints respond correctly
-- [ ] `FORK.md` sync status updated
+- [ ] Sync Status section (top of `FORK_SYNC.md`) updated
 - [ ] Force-push both branches (after confirming rebase is correct)
 
 ## Force Push (after successful rebase)
