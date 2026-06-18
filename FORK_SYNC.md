@@ -4,7 +4,7 @@ How to keep this fork in sync with upstream PocketBase releases.
 
 ## Sync Status
 
-**Current:** synced to upstream **v0.39.3** (`465cfb52`) on 2026-06-11.
+**Current:** synced to upstream **v0.39.4** (`507ecb26`) on 2026-06-18.
 WebAuthn library `go-webauthn/webauthn` **v0.17.4**; `modernc.org/sqlite` **v1.52.0**.
 Tests: full `go test ./...` green on `feat/webauthn-passkey-support` and
 `deploy/azure` (the known macOS `fsnotify` flakes
@@ -13,6 +13,7 @@ ignored; the Docker build/health-check smoke test runs in CI).
 
 | Synced to | Date | WebAuthn | Notes |
 | --- | --- | --- | --- |
+| v0.39.4 (`507ecb26`) | 2026-06-18 | v0.17.4 | OAuth2 RedirectURL validator removed; goja bumped to 20260607; dlclark/regexp2→v2; golang.org/x/sync v0.21.0; UI: relation-field sorting, sortable index count fix, tooltip fixes. Zero overlap with deploy layer. |
 | v0.39.3 (`465cfb52`) | 2026-06-11 | v0.17.4 | modernc 1.51→1.52; upstream field-settings UI refactor, number `0`-max validator fix, extra SQL write keywords, cron panic-recover. `feat`/`deploy/azure` had drifted behind `master` at v0.39.0 — rebuilt by sourcing the fork delta from `master` to avoid regression. |
 | v0.39.1 (`5631d9b1`) | 2026-06-07 | v0.17.4 | Prior production deploy to Azure. |
 | v0.39.0 (`aeb78e51`) | 2026-05 | v0.17.4 | `PasskeyResetToken` secret redaction re-added. |
