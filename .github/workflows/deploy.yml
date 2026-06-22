@@ -52,3 +52,9 @@ jobs:
           # the repo variables explicitly per phase.
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
           BIND_CERT: ${{ vars.BIND_CERT }}
+          # WebAuthn relying-party config, decoupled from AppURL so passkeys are
+          # scoped to the parent domain (stfoafrisco.org) while auth/email links
+          # stay on the auth subdomain. Unset vars resolve to empty and the app
+          # falls back to the AppURL hostname/origin.
+          WEBAUTHN_RP_ID: ${{ vars.WEBAUTHN_RP_ID }}
+          WEBAUTHN_RP_ORIGINS: ${{ vars.WEBAUTHN_RP_ORIGINS }}
