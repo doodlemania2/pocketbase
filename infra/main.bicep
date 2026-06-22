@@ -43,6 +43,12 @@ param bindCertificate bool = false
 @description('Container image reference. Leave default; azd deploy replaces it with the freshly built image after the first provision.')
 param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
+@description('WebAuthn relying-party ID (passkey effective domain, e.g. stfoafrisco.org). Decoupled from AppURL so passkeys can be scoped to a parent domain. Empty = fall back to the AppURL hostname at runtime.')
+param webauthnRpId string = ''
+
+@description('Comma-separated allowed WebAuthn origins (e.g. https://app.stfoafrisco.org). Empty = fall back to the AppURL origin at runtime.')
+param webauthnRpOrigins string = ''
+
 var abbrs = {
   containerAppsEnvironment: 'cae'
   containerApp: 'ca'
@@ -126,6 +132,8 @@ module containerApp 'modules/container-app.bicep' = {
     customDomain: customDomain
     bindCertificate: bindCertificate
     containerImage: containerImage
+    webauthnRpId: webauthnRpId
+    webauthnRpOrigins: webauthnRpOrigins
   }
 }
 

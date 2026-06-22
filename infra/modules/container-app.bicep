@@ -52,6 +52,12 @@ param bindCertificate bool = false
 @description('Container image reference. Defaults to a placeholder; azd deploy replaces with the real image after build.')
 param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
+@description('WebAuthn relying-party ID (passkey effective domain, e.g. stfoafrisco.org). Decoupled from AppURL so passkeys can be scoped to a parent domain while auth/email links stay on a subdomain. Empty = the app falls back to the AppURL hostname at runtime.')
+param webauthnRpId string = ''
+
+@description('Comma-separated list of allowed WebAuthn origins (e.g. https://app.stfoafrisco.org). Empty = the app falls back to the AppURL origin at runtime.')
+param webauthnRpOrigins string = ''
+
 // Reference the shared Log Analytics workspace (cross-RG) to fetch its shared key for Container Apps env wiring
 resource sharedLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: last(split(logAnalyticsWorkspaceId, '/'))
@@ -203,6 +209,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'PB_ADMIN_EMAIL', secretRef: 'pb-admin-email' }
           ], empty(pbAdminPassword) ? [] : [
             { name: 'PB_ADMIN_PASSWORD', secretRef: 'pb-admin-password' }
+          ], empty(webauthnRpId) ? [] : [
+            { name: 'WEBAUTHN_RP_ID', value: webauthnRpId }
+          ], empty(webauthnRpOrigins) ? [] : [
+            { name: 'WEBAUTHN_RP_ORIGINS', value: webauthnRpOrigins }
           ])
           probes: [
             {

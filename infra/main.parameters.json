@@ -23,6 +23,12 @@
     "containerImage": {
       "value": "${SERVICE_POCKETBASE_IMAGE_NAME=mcr.microsoft.com/k8se/quickstart:latest}"
     },
+    "webauthnRpId": {
+      "value": "${WEBAUTHN_RP_ID=}"
+    },
+    "webauthnRpOrigins": {
+      "value": "${WEBAUTHN_RP_ORIGINS=}"
+    },
     "sharedObservabilityResourceGroup": {
       "value": "${SHARED_OBS_RG}"
     },
