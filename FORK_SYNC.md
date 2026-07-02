@@ -210,14 +210,16 @@ curl -sf http://localhost:8090/api/health && echo "OK" || echo "FAIL"
 docker stop pb-sync-smoke
 ```
 
-**Known upstream test flakes (allowlist).** These tests fail on macOS regardless
-of our changes and are pre-existing in upstream PocketBase. Treat them as ignored
-unless `make test` reports OTHER failures:
+**Known flaky tests (allowlist).** These flake for environment reasons (macOS fs
+events, CI timing) rather than fork changes, and are pre-existing in upstream
+PocketBase. Treat them as ignored unless `make test`/CI reports OTHER failures;
+re-run the specific test to confirm before investigating:
 
 | Test                                       | Cause                                                |
 |--------------------------------------------|------------------------------------------------------|
 | `core/TestNotifyWatcher_CollectionsUpdate` | `fsnotify` flake on macOS — duplicate WRITE events.  |
 | `core/TestNotifyWatcher_SettingsUpdate`    | Same `fsnotify`/macOS flake.                         |
+| `apis/TestDefaultRateLimitMiddleware`      | Timing-sensitive rate-limit windows (subtest `#rate/a#03`); flakes under CI load on Linux (`goreleaser` "Run tests" step), passes locally. Re-run to clear. Confirmed a flake in the v0.39.5 sync: `feat` basebuild red on it while `master`/`deploy/azure` basebuild were green on identical code. |
 
 Resolved driver-difference patch (do not revert during upstream sync):
 
