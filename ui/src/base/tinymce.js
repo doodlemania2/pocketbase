@@ -201,9 +201,10 @@ window.app.components.tinymce = function(propsArg = {}) {
                 "media",
                 "table",
                 "wordcount",
+                "fullscreen",
             ],
             toolbar:
-                "styles | alignleft aligncenter alignright | bold italic forecolor backcolor | bullist numlist | link media_picker table codesample | direction code",
+                "styles | alignleft aligncenter alignright | bold italic forecolor backcolor | bullist numlist | link media_picker table codesample direction | code fullscreen",
             paste_postprocess: (editor, args) => {
                 cleanupPastedNode(args.node);
             },
@@ -490,13 +491,13 @@ function unwrap(node) {
     parent.removeChild(node);
 }
 
+const scriptId = "lazy-tinymce-js";
+
 async function loadTinyMCE() {
     // already loaded
     if (typeof window.tinymce != "undefined") {
         return;
     }
-
-    const scriptId = "lazy-tinymce-js";
 
     // in the process of being loaded
     if (document.getElementById(scriptId)) {
@@ -541,3 +542,28 @@ async function loadTinyMCE() {
         document.dispatchEvent(new CustomEvent("tinymceLoadError", { detail: err }));
     });
 }
+
+let preloadedElem;
+function preloadTinyMCE() {
+    if (typeof window.tinymce != "undefined" || preloadedElem || document.getElementById(scriptId)) {
+        return; // already loaded or in the process of loading
+    }
+
+    preloadedElem = t.div({ hidden: true }, app.components.tinymce());
+    document.body.appendChild(preloadedElem);
+
+    // small enough delay for the plugins to initialize
+    setTimeout(() => {
+        preloadedElem?.remove();
+        preloadedElem = null;
+    }, 1500);
+}
+
+// preload TinyMCE with all of its plugins in the background for the first
+// collection known to have an editor field in order to speed up initial rendering
+const watcher = watch(() => app.store.activeCollection?.id, () => {
+    if (!!app.store.activeCollection?.fields?.find((f) => f.type == "editor")) {
+        preloadTinyMCE();
+        watcher?.unwatch?.();
+    }
+});

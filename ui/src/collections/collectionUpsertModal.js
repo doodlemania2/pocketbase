@@ -7,6 +7,7 @@ import { collectionViewQueryTab } from "./collectionViewQueryTab";
 window.app = window.app || {};
 window.app.modals = window.app.modals || {};
 
+// @todo consider adding an option for setting the initial open tab
 window.app.modals.openCollectionUpsert = function(collection = {}, modalSettings = {
     // base modal events
     onbeforeopen: null, // function(el) {},
@@ -975,7 +976,7 @@ function deleteDropdownItem(data, modalSettings) {
                             return false;
                         }
 
-                        app.modals.close(collectionModal);
+                        app.modals.close(collectionModal, true);
                     },
                     () => {
                         local.nameConfirm = "";
