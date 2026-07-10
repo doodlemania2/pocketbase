@@ -4,16 +4,19 @@ How to keep this fork in sync with upstream PocketBase releases.
 
 ## Sync Status
 
-**Current:** synced to upstream **v0.39.5** (`667a7650`) on 2026-07-02.
+**Current:** synced to upstream **v0.39.6** (`de3c3f71`) on 2026-07-10.
 WebAuthn library `go-webauthn/webauthn` **v0.17.4**; `modernc.org/sqlite` **v1.52.0**.
 Tests: full `go test ./...` green on `feat/webauthn-passkey-support` and
 `deploy/azure` (the known macOS `fsnotify` flakes
 `TestNotifyWatcher_CollectionsUpdate` / `TestNotifyWatcher_SettingsUpdate` are
-ignored; the Docker build/health-check smoke test runs in CI — no local container
-runtime was available this sync, so it was deferred to CI).
+ignored — confirmed non-deterministic this sync: `SettingsUpdate` passed then
+failed on back-to-back isolated re-runs; the Docker build/health-check smoke test
+runs in CI — no local container runtime was available this sync, so it was
+deferred to CI).
 
 | Synced to | Date | WebAuthn | Notes |
 | --- | --- | --- | --- |
+| v0.39.6 (`de3c3f71`) | 2026-07-10 | v0.17.4 | Deps + minor backend hardening. goja bumped 20260618→20260701 (`WeakMap` regression fixes); `golang.org/x/crypto` 0.52→0.53, `net` 0.55→0.56, `mod`/`sys`/`text`/`tools` bumped; min Go GH action 1.26.4→1.26.5. Backend: `tools/auth/microsoft.go` — Microsoft OAuth2 hardening (configurable preferred safe email extraction); `tools/mailer/sendmail.go` — `Cc`/`Bcc` on the dev sendmail command; `tools/dbutils/index_test.go` — test typo. **First non-empty deploy overlap since v0.39.2**: `.github/workflows/release.yaml` — deploy adds a top-of-file `permissions: contents: write` block while upstream bumped `go-version` 1.26.4→1.26.5 at line 31 (disjoint hunks → 3-way merged cleanly; rebuilt file carries permissions + go-version 1.26.5 + fork's `goreleaser-action@v7`). feat-branch `go.mod` conflict resolved by taking upstream `golang.org/x/*` versions + re-adding `tinylib/msgp`/`x448/float16` webauthn indirects. Upstream still has **no** `PasskeyResetToken` — Step 2 HIGH-risk redaction warning dormant (5 upstream token configs + fork's own `PasskeyResetToken` all redacted). |
 | v0.39.5 (`667a7650`) | 2026-07-02 | v0.17.4 | UI/deps-only upstream release: goja bumped 20260607→20260618 (`TypedArray` fixes); dlclark/regexp2/v2 2.2.1→2.2.2; UI — ellipsis for long `url` field values, readded editor "fullscreen" option + TinyMCE preload ([#7746]), force-close modals on record/collection deletion. **Zero backend Go logic changes** (upstream touched only go.mod/go.sum/CHANGELOG/ui). Deploy delta overlap with upstream-changed files = empty. Note: upstream still has **no** `PasskeyResetToken` — the Step 2 HIGH-risk redaction warning is dormant for this version (only the 5 existing token configs need redaction, all present). |
 | v0.39.4 (`507ecb26`) | 2026-06-18 | v0.17.4 | OAuth2 RedirectURL validator removed; goja bumped to 20260607; dlclark/regexp2→v2; golang.org/x/sync v0.21.0; UI: relation-field sorting, sortable index count fix, tooltip fixes. Zero overlap with deploy layer. |
 | v0.39.3 (`465cfb52`) | 2026-06-11 | v0.17.4 | modernc 1.51→1.52; upstream field-settings UI refactor, number `0`-max validator fix, extra SQL write keywords, cron panic-recover. `feat`/`deploy/azure` had drifted behind `master` at v0.39.0 — rebuilt by sourcing the fork delta from `master` to avoid regression. |
