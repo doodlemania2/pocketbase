@@ -1470,7 +1470,7 @@ func (app *BaseApp) initLogger() error {
 		},
 	})
 
-	go func() {
+	routine.FireAndForget(func() {
 		ctx := context.Background()
 
 		for {
@@ -1481,7 +1481,7 @@ func (app *BaseApp) initLogger() error {
 				handler.WriteAll(ctx)
 			}
 		}
-	}()
+	})
 
 	app.logger = slog.New(handler)
 

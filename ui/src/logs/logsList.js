@@ -359,10 +359,25 @@ export function logsList(logsSettings) {
                                                 id: "cb_" + log.id,
                                                 type: "checkbox",
                                                 checked: () => !!data.bulkSelected[log.id],
+                                                onclick: (e) => {
+                                                    e.target.__shiftKey = e.shiftKey;
+                                                },
                                                 onchange: (e) => {
-                                                    const bulkSelected = JSON.parse(
-                                                        JSON.stringify(data.bulkSelected),
-                                                    );
+                                                    let bulkSelected = Object.assign({}, data.bulkSelected);
+
+                                                    // range select
+                                                    if (e.target.__shiftKey) {
+                                                        e.target.__shiftKey = false;
+
+                                                        app.utils.bulkSelectRange(
+                                                            data.logs,
+                                                            bulkSelected,
+                                                            log,
+                                                            e.target.checked,
+                                                        );
+                                                    }
+
+                                                    // toggle current log
                                                     if (e.target.checked) {
                                                         bulkSelected[log.id] = log;
                                                     } else {

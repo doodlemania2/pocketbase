@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode"
 
-	validation "github.com/go-ozzo/ozzo-validation/v4"
+	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pocketbase/dbx"

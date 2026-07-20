@@ -114,3 +114,15 @@ Third, even if that issue is still available, with PocketBase it would have been
 
 In the future I may consider eventually replacing the library because it is no longer actively maintained but as of now it is working correctly and as expected for our use case and you can safely flag the security warning as false-positive.
 </details>
+
+<details>
+<summary><strong>JSVM "sandboxing"</strong></summary>
+
+This is another very common report but **there is no such thing as JSVM "sandboxing" in PocketBase**.
+
+The JS `pb_hooks` (or JSVM for short) are NOT supposed to run untrusted or client provided JavaScript code _(the same way you are not supposed to run untrusted code in your Node.js server)_.
+
+Once interpreted the `pb_hooks` run as part of the same application process together with the rest of the Go code. There are no additional filesystem, network, memory, etc. restrictions. This means that it is OK for developers to be able to access environment variables, perform network calls to any URLs they want, invoke shell commands or even sleep/block the script execution.
+
+So if you are security researcher and not sure if something is a security fault in the JS hooks, ask yourself - "Can I do the same when using PocketBase as Go framework?" and if the answer is "Yes" then it is not a security issue with the JSVM.
+</details>

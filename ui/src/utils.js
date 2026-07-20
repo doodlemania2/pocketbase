@@ -1251,6 +1251,45 @@ const utils = {
         return yiq < 128;
     },
 
+    /**
+     * Applies a bulk selection from the last bulkSelected model entry
+     * to the specified current one (used for "Shift + Click" selection).
+     *
+     * The bulkSelected argument is changed in place.
+     *
+     * @param {Array}   models
+     * @param {Object}  bulkSelected
+     * @param {Object}  currentModel
+     * @param {boolean} checked
+     */
+    bulkSelectRange(models, bulkSelected, currentModel, checked) {
+        const currentSelectedIndex = models.findIndex((m) => m.id == currentModel.id);
+        if (currentSelectedIndex == -1) {
+            return;
+        }
+
+        const bulkSelectedKeys = Object.keys(bulkSelected);
+        const lastSelectedId = bulkSelectedKeys[bulkSelectedKeys.length - 1];
+        const lastSelectedIndex = models.findIndex((m) => m.id == lastSelectedId);
+        if (lastSelectedIndex == -1) {
+            return;
+        }
+
+        let start = lastSelectedIndex;
+        let end = currentSelectedIndex;
+        if (start > end) {
+            [start, end] = [end, start];
+        }
+
+        for (let i = start; i <= end; i++) {
+            if (checked) {
+                bulkSelected[models[i].id] = models[i];
+            } else {
+                delete bulkSelected[models[i].id];
+            }
+        }
+    },
+
     // ---------------------------------------------------------------
     imageExtensions: [".jpg", ".jpeg", ".png", ".svg", ".gif", ".jfif", ".webp", ".avif"],
     videoExtensions: [".mp4", ".avi", ".mov", ".3gp", ".wmv"],

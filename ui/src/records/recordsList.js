@@ -548,7 +548,7 @@ window.app.components.recordsList = function(propsArg = {}) {
                         );
                     }
 
-                    return data.records.map((record, i) => {
+                    return data.records.map((record) => {
                         return t.tr(
                             {
                                 rid: recordRid(record),
@@ -593,8 +593,25 @@ window.app.components.recordsList = function(propsArg = {}) {
                                         type: "checkbox",
                                         id: () => uniqueId + record.id,
                                         checked: () => !!data.bulkSelected[record.id],
+                                        onclick: (e) => {
+                                            e.target.__shiftKey = e.shiftKey;
+                                        },
                                         onchange: (e) => {
-                                            const bulkSelected = JSON.parse(JSON.stringify(data.bulkSelected));
+                                            let bulkSelected = Object.assign({}, data.bulkSelected);
+
+                                            // range select
+                                            if (e.target.__shiftKey) {
+                                                e.target.__shiftKey = false;
+
+                                                app.utils.bulkSelectRange(
+                                                    data.records,
+                                                    bulkSelected,
+                                                    record,
+                                                    e.target.checked,
+                                                );
+                                            }
+
+                                            // toggle current record
                                             if (e.target.checked) {
                                                 bulkSelected[record.id] = record;
                                             } else {

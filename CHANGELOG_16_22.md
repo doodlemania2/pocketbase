@@ -2,6 +2,22 @@
 > For the most recent versions, please refer to [CHANGELOG.md](./CHANGELOG.md)
 ---
 
+## v0.22.49
+
+- (_Backported from v0.39.8_) Bumped `golang.org/x/*` indirect dependencies as there are some minor security fixes.
+
+- (_Backported from v0.39.8_) Updated `modernc.org/sqlite` to v1.54.0 ([SQLite 3.53.3](https://sqlite.org/src/timeline?from=version-3.53.2&to=version-3.53.3&to2=branch-3.53)).
+
+
+## v0.22.48
+
+- (_Backported from v0.39.7_) Replaced `github.com/go-ozzo/ozzo-validation` with the fork `github.com/pocketbase/ozzo-validation` since the original library has recently changed ownership and the new maintainer cannot be trusted.
+
+- (_Backported from v0.39.7_) Fixed View collection `*` validator and added more friendly error messages ([#7761](https://github.com/pocketbase/pocketbase/issues/7761)).
+
+- (_Backported from v0.39.7_) ⚠️ Security fix for unhandled panic in internal worker goroutines ([#7762](https://github.com/pocketbase/pocketbase/discussions/7762)).
+
+
 ## v0.22.47
 
 - (_Backported from v0.39.6_) Bumped the min Go GitHub action version to 1.26.5 as it includes some [minor security fixes](https://github.com/golang/go/issues?q=milestone%3AGo1.26.5).
