@@ -225,6 +225,7 @@ re-run the specific test to confirm before investigating:
 | `core/TestNotifyWatcher_CollectionsUpdate` | `fsnotify` flake on macOS — duplicate WRITE events.  |
 | `core/TestNotifyWatcher_SettingsUpdate`    | Same `fsnotify`/macOS flake.                         |
 | `apis/TestDefaultRateLimitMiddleware`      | Timing-sensitive rate-limit windows (subtest `#rate/a#03`); flakes under CI load on Linux (`goreleaser` "Run tests" step), passes locally. Re-run to clear. Confirmed a flake in the v0.39.5 sync: `feat` basebuild red on it while `master`/`deploy/azure` basebuild were green on identical code. |
+| `tools/cron/TestCronStartStop`             | Timing-sensitive scheduler start/stop assertions; flakes under CI load on Linux (`goreleaser` "Run tests" step), passes locally. Re-run to clear. First seen in the v0.39.8 sync: `feat` basebuild red on it while `master`/`deploy/azure` basebuild were green on identical content in concurrent runs (`tools/cron` is byte-identical to upstream — the fork never touches it); passed 5/5 locally and cleared on `gh run rerun --failed`. |
 
 Resolved driver-difference patch (do not revert during upstream sync):
 
