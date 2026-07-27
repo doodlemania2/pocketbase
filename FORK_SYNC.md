@@ -12,9 +12,45 @@ Tests: full `go test ./...` green on both branches (33 ok packages each) apart
 from allowlisted flakes that cleared on isolated re-run —
 `apis/TestDefaultRateLimitMiddleware` on `feat/webauthn-passkey-support`, and
 `core/TestNotifyWatcher_{CollectionsUpdate,SettingsUpdate}` on `deploy/azure`.
-`golangci-lint` is not installed locally — deferred to CI. The Docker
-build/health-check smoke test runs in CI — no local container runtime was
-available this sync, so it was deferred to CI.
+`golangci-lint` v2.6.2 run locally on both branches: **0 issues** (after the
+gofmt fixes below). The Docker build/health-check smoke test runs in CI — no
+local container runtime was available this sync, so it was deferred to CI;
+prod health at https://auth.stfoafrisco.org/api/health confirmed 200 after the
+Azure deploy.
+
+**Post-sync follow-ups landed the same day** (see the `Test` workflow note in
+"CI coverage" below): the `Test` workflow had never once executed, so
+`golangci-lint` and the Docker smoke test were never actually gating anything.
+Fixed, and the 3 latent gofmt violations it would have caught were cleaned up.
+Also bumped `vite` 8.0.14→8.1.5 and `postcss` 8.5.15→8.5.23 on the **feat**
+branch to clear 3 Dependabot alerts (build-time devDeps only, nothing shipped
+in the Go binary).
+
+## CI coverage
+
+Workflows and what actually gates a push:
+
+| Workflow | File | Runs on |
+| --- | --- | --- |
+| `basebuild` | `.github/workflows/release.yaml` | push to all branches + tags — builds UI, `go test ./...`, GoReleaser |
+| `Test` | `.github/workflows/test.yml` | push/PR to `master`, `deploy/azure`, `feat/*` — `go test -v --cover`, **golangci-lint**, **Docker build + `/api/health` smoke test** |
+| `Deploy to Azure` | `.github/workflows/deploy.yml` | push to `deploy/azure` — real Container Apps deploy |
+
+> **Gotcha that hid a gap for many syncs.** A GitHub Actions workflow only runs
+> if the workflow file exists **on the branch being pushed**. `test.yml` is a
+> deploy-layer file, so it lives on `master`/`deploy/azure` but *not* on
+> `feat/webauthn-passkey-support` — yet its only push trigger was
+> `feat/webauthn-passkey-support`. Result: the workflow never fired, on any
+> branch, ever (`gh run list --workflow=test.yml` returned zero runs), and this
+> fork also syncs by force-push rather than PRs, so the `pull_request` trigger
+> never fired either. `golangci-lint` and the Docker smoke test were silently
+> not running. Fixed at v0.39.9 by adding `master` + `deploy/azure` to the push
+> triggers. If you ever move `test.yml` between layers, re-check this.
+>
+> Also fixed at the same time: the lint step pinned
+> `golangci/golangci-lint-action@v6`, which installs golangci-lint **v1** — but
+> `golangci.yml` is schema `version: "2"`. It would have failed to parse on the
+> first real run. Now `@v7` with an explicit `version: v2.6.2`.
 
 | Synced to | Date | WebAuthn | Notes |
 | --- | --- | --- | --- |
@@ -259,6 +295,10 @@ follow-up.
 
 - [ ] `make test` passes on `feat/webauthn-passkey-support`
 - [ ] `make test` passes on `deploy/azure`
+- [ ] `make lint` clean on **both** branches — `golangci.yml` is schema v2, so
+      you need golangci-lint v2 (`go install
+      github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2`). Fork-added
+      files drift out of gofmt easily during rebases (import regrouping).
 - [ ] `docker build` succeeds on `deploy/azure`
 - [ ] Health check passes on built container
 - [ ] WebAuthn endpoints respond correctly
