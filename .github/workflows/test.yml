@@ -2,9 +2,13 @@ name: Test
 
 on:
   pull_request:
-    branches: [deploy/azure, feat/webauthn-passkey-support]
+    branches: [master, deploy/azure, feat/webauthn-passkey-support]
   push:
-    branches: [feat/webauthn-passkey-support]
+    # NOTE: a workflow only runs if the file exists on the branch being pushed.
+    # test.yml is part of the deploy layer, so it is present on master and
+    # deploy/azure but NOT on feat/webauthn-passkey-support — the feat entry
+    # below only takes effect once/if the file is carried there.
+    branches: [master, deploy/azure, feat/webauthn-passkey-support]
 
 permissions:
   contents: read
@@ -23,8 +27,11 @@ jobs:
         run: go test ./... -v --cover
 
       - name: Run linter
-        uses: golangci/golangci-lint-action@v6
+        # golangci.yml is schema `version: "2"`, which requires golangci-lint v2
+        # (action v7+). The old action@v6 installs v1 and fails to parse it.
+        uses: golangci/golangci-lint-action@v7
         with:
+          version: v2.6.2
           args: -c ./golangci.yml
 
   docker-build:
