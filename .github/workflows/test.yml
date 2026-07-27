@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [master, deploy/azure, feat/webauthn-passkey-support]
+  push:
+    # NOTE: a workflow only runs if the file exists on the branch being pushed.
+    # test.yml is part of the deploy layer, so it is present on master and
+    # deploy/azure but NOT on feat/webauthn-passkey-support — the feat entry
+    # below only takes effect once/if the file is carried there.
+    branches: [master, deploy/azure, feat/webauthn-passkey-support]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./... -v --cover
+
+      - name: Run linter
+        # golangci.yml is schema `version: "2"`, which requires golangci-lint v2
+        # (action v7+). The old action@v6 installs v1 and fails to parse it.
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.6.2
+          args: -c ./golangci.yml
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build Docker image
+        run: docker build -t pocketbase-fork:test .
+
+      - name: Smoke test container
+        run: |
+          docker run -d --name pb-test -p 8090:8090 pocketbase-fork:test
+          sleep 5
+          curl -sf http://localhost:8090/api/health || (docker logs pb-test && exit 1)
+          docker stop pb-test
