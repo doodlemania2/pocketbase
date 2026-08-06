@@ -121,9 +121,20 @@ record IDs, the Dataverse org name (`stfoafrisco-prod` vs `stfoafrisco-staging`)
 link, and copy-pasteable commands — not "the affected family" or "the usual script". Never put
 a secret value in an item; name the Key Vault secret instead. One task per item.
 
-Never tick, reorder, or delete an item — checking off and archiving are Derek's alone. If a task
-you filed became unnecessary, patch it to `~~struck through~~` with the reason and date. If the
-Outline MCP is unavailable in your session (headless and cron runs sometimes lack it), say so
-explicitly and put the fully-formatted item inline in your reply rather than dropping it.
+**Sweep the ticked items when you file.** Ticking is Derek's alone — never tick, untick, or
+reorder an item. Moving a ticked item is your job. Every time you add or edit an inbox item,
+first move every already-ticked item to the child page **Archive**
+(`43e67dfb-7055-40a9-a17c-7c54186c024f`), under its `## 2026` heading. Keep the title line — it
+carries the repo, the issue link and the date. Drop the Why / Do / Done-when / Context
+sub-bullets, because the linked GitHub issue holds that detail. Write the Archive first and the
+inbox second, so a failed second write loses nothing. Never sweep an item Derek has not ticked,
+however finished it looks; add a dated note to it instead. Never put literal checkbox syntax
+inside an item, even in backticks — the Outline parser reads it as list markup and silently
+destroys the sub-bullets of the items that follow.
+
+If a task you filed became unnecessary, patch it to `~~struck through~~` with the reason and
+date. If the Outline MCP is unavailable in your session (headless and cron runs sometimes lack
+it), say so explicitly and put the fully-formatted item inline in your reply rather than
+dropping it.
 
 <!-- END derek-task-inbox -->
