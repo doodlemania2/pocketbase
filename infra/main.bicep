@@ -49,6 +49,22 @@ param webauthnRpId string = ''
 @description('Comma-separated allowed WebAuthn origins (e.g. https://app.stfoafrisco.org). Empty = fall back to the AppURL origin at runtime.')
 param webauthnRpOrigins string = ''
 
+@description('OTLP collector ingest URL (endpoint root, not a signal path). Empty = telemetry export disabled.')
+param otlpEndpoint string = ''
+
+@description('Full OTLP auth header, "Authorization=Bearer <token>". Supply via Key Vault reference; never commit the token.')
+@secure()
+param otlpAuthHeader string = ''
+
+@description('Stable service.name for this app in SigNoz. Never change it once set.')
+param otelServiceName string = ''
+
+@description('deployment.environment value: production | staging | development.')
+param otelEnvironment string = ''
+
+@description('Minimum log level exported to the collector (DEBUG|INFO|WARN|ERROR). Empty exports everything.')
+param otelMinLevel string = ''
+
 var abbrs = {
   containerAppsEnvironment: 'cae'
   containerApp: 'ca'
@@ -134,6 +150,11 @@ module containerApp 'modules/container-app.bicep' = {
     containerImage: containerImage
     webauthnRpId: webauthnRpId
     webauthnRpOrigins: webauthnRpOrigins
+    otlpEndpoint: otlpEndpoint
+    otlpAuthHeader: otlpAuthHeader
+    otelServiceName: otelServiceName
+    otelEnvironment: otelEnvironment
+    otelMinLevel: otelMinLevel
   }
 }
 

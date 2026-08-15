@@ -58,3 +58,12 @@ jobs:
           # falls back to the AppURL hostname/origin.
           WEBAUTHN_RP_ID: ${{ vars.WEBAUTHN_RP_ID }}
           WEBAUTHN_RP_ORIGINS: ${{ vars.WEBAUTHN_RP_ORIGINS }}
+          # OTLP export to the self-hosted SigNoz collector. Unset OTLP_ENDPOINT
+          # disables telemetry export entirely — the app logs to SQLite only, as
+          # upstream does. The auth header carries the ingest token, so it is a
+          # repo SECRET, never a variable.
+          OTLP_ENDPOINT: ${{ vars.OTLP_ENDPOINT }}
+          OTLP_AUTH_HEADER: ${{ secrets.OTLP_AUTH_HEADER }}
+          OTEL_SERVICE_NAME: ${{ vars.OTEL_SERVICE_NAME }}
+          OTEL_ENVIRONMENT: ${{ vars.OTEL_ENVIRONMENT }}
+          OTEL_MIN_LEVEL: ${{ vars.OTEL_MIN_LEVEL }}

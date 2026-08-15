@@ -29,6 +29,21 @@
     "webauthnRpOrigins": {
       "value": "${WEBAUTHN_RP_ORIGINS=}"
     },
+    "otlpEndpoint": {
+      "value": "${OTLP_ENDPOINT=}"
+    },
+    "otlpAuthHeader": {
+      "value": "${OTLP_AUTH_HEADER=}"
+    },
+    "otelServiceName": {
+      "value": "${OTEL_SERVICE_NAME=}"
+    },
+    "otelEnvironment": {
+      "value": "${OTEL_ENVIRONMENT=}"
+    },
+    "otelMinLevel": {
+      "value": "${OTEL_MIN_LEVEL=}"
+    },
     "sharedObservabilityResourceGroup": {
       "value": "${SHARED_OBS_RG}"
     },
