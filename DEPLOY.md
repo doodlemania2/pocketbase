@@ -1,6 +1,13 @@
 # Azure Deployment Runbook
 
-End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with Litestream → Azure Blob backups, shared cross-RG observability (Log Analytics + Application Insights), and a custom domain.
+End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with PocketBase's native scheduled backups, shared cross-RG observability (Log Analytics + Application Insights), and a custom domain.
+
+> **Litestream is disabled and has been since 2026-05-25.** The binary is still
+> baked into the image and `litestream.yml` still ships, but no `LITESTREAM_*`
+> env var is set, so `entrypoint.sh` skips both restore and replicate. Durability
+> comes from the persistent NFS `/pb_data` volume plus PocketBase's built-in
+> backup cron. See [Backups & disaster recovery](#backups--disaster-recovery)
+> before you rely on anything in this file for a restore.
 
 > Throughout this document, replace `<...>` placeholders with values from your environment. The repo ships zero environment-specific defaults — real values live in `.azure/<envName>/.env` (gitignored).
 
@@ -10,15 +17,20 @@ End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with 
 |---|---|---|---|
 | Resource group | `<rg-name>` (default `rg-<envName>`) | — | Created by deployment |
 | ACR | `cr<resourceToken>` (Basic) | `<rg-name>` | Holds `pocketbase:latest` |
-| Storage account | `<storage-account>` | `<rg-name>` | Azure Files share `pbdata` + blob container `pocketbase-backups` |
+| Storage account | `<storage-account>` | `<rg-name>` | Premium **FileStorage**, NFS share `pbdata`. No blob endpoint — this kind cannot host one |
 | Container Apps env | `cae-<envName>` | `<rg-name>` | Consumption profile, logs → shared LAW |
 | Container App | `ca-<envName>` | `<rg-name>` | 1 vCPU / 2 GiB, **single replica** (SQLite) |
-| Managed identity | `id-<envName>` | `<rg-name>` | AcrPull + Storage Blob Data Contributor |
+| Managed identity | `id-<envName>` | `<rg-name>` | AcrPull |
 | Log Analytics (shared) | `<law-name>` | `<shared-obs-rg>` | Cross-RG `existing` reference |
 | App Insights (shared) | `<app-insights-name>` | `<shared-obs-rg>` | Cross-RG `existing` reference |
 
-PocketBase data path **inside the container**: `/pb_data` (Azure Files mount).
-Litestream replicates `data.db` and `auxiliary.db` to blob every 10 s; restores on cold start if `/pb_data/data.db` is missing.
+PocketBase data path **inside the container**: `/pb_data`, an **NFS** Azure Files
+mount that persists across pod restarts and across PocketBase's own
+`syscall.Exec` self-restart. NFS (not SMB) is required: SMB does not honor the
+POSIX byte-range locks SQLite WAL mode needs, and an SMB mount crashlooped with
+`SQLITE_BUSY (5)` (fixed in `6a4f04df`). That in turn is why the environment is
+VNet-integrated and the storage account is Premium FileStorage — Container Apps
+only supports NFS Azure Files under those conditions.
 
 ## Prerequisites (one-time)
 
@@ -135,20 +147,67 @@ ContainerAppConsoleLogs_CL
 | take 200
 ```
 
-### Verify Litestream is replicating
-```sh
-az storage blob list \
-  --account-name <storage-account> \
-  --container-name pocketbase-backups \
-  --auth-mode login \
-  --query "[].name" -o tsv | head -20
-```
-You should see `data.db/...` and `auxiliary.db/...` snapshot/WAL files updating every 10 s.
+## Backups & disaster recovery
 
-### Restore from blob (disaster recovery)
-1. Scale the container app to 0 replicas (`az containerapp revision deactivate`).
-2. Delete or rename `/pb_data/data.db` in the Azure Files share.
-3. Scale back up — the entrypoint runs `litestream restore` automatically when `data.db` is missing and `LITESTREAM_REPLICA_URL` is set.
+Durability rests on two independent things — **neither of them is Litestream**:
+
+1. **The persistent NFS `/pb_data` volume.** Survives pod restarts, revision
+   swaps, and PocketBase's `syscall.Exec` self-restart.
+2. **PocketBase's native backup cron.** Configured in the superuser dashboard
+   under *Settings → Backups*, currently running daily at midnight with an S3
+   target. This is the only off-box copy of the data.
+
+### Verify backups are landing
+
+There is no blob replica to inspect — the storage account is FileStorage and has
+no blob endpoint. Check the backup list through the API instead:
+
+```sh
+TOKEN=$(curl -s -X POST https://<custom-domain>/api/collections/_superusers/auth-with-password \
+  -H 'Content-Type: application/json' \
+  -d '{"identity":"<admin-email>","password":"<password>"}' | jq -r .token)
+curl -s https://<custom-domain>/api/backups -H "Authorization: $TOKEN" | jq '.[].key'
+```
+
+The newest entry should be from the last 24 h. Also confirm the S3 bucket
+directly — the API list reflects the configured storage, but a bucket-side check
+is the one that proves the object actually landed.
+
+> **Backup failures can be silent.** `CreateBackup` reports errors through
+> `app.Logger()`, which writes to `auxiliary.db`. If that database is damaged the
+> error never reaches the log, and the only surviving alarm is the superuser
+> email from `sendSystemAlertToAllSuperusers` — which needs working SMTP. Treat
+> "no errors in the log" as weak evidence; check the bucket.
+
+### Restore (disaster recovery)
+
+**Do not delete `/pb_data/data.db` expecting an automatic restore.** There is no
+replica to restore from. `litestream_restore()` in [entrypoint.sh](entrypoint.sh)
+is gated on `LITESTREAM_REPLICA_URL`, which is unset, so it is a no-op —
+PocketBase would simply create an empty database and the deleted data would be
+gone. (Earlier revisions of this runbook documented exactly that procedure. It
+was correct only while Litestream was enabled, before 2026-05-25.)
+
+To restore, use the dashboard: *Settings → Backups → upload/select a backup →
+Restore*. PocketBase swaps `pb_data` and self-restarts via `syscall.Exec`.
+Expect to lose up to one backup interval (24 h) of writes — for this app that
+means recently enrolled passkeys, whose owners will need to re-register.
+
+### Recovering a corrupt `auxiliary.db`
+
+`auxiliary.db` holds only the `_logs` table
+([migrations/1640988000_aux_init.go](migrations/1640988000_aux_init.go)), so it is
+safe to discard. Symptom is `database disk image is malformed (11)` on every
+request-log write. Delete it and let PocketBase rebuild:
+
+```sh
+az containerapp exec -g <rg-name> -n ca-<envName> --command \
+  "sh -c 'rm -f /pb_data/auxiliary.db /pb_data/auxiliary.db-wal /pb_data/auxiliary.db-shm'"
+az containerapp revision restart -g <rg-name> -n ca-<envName> --revision <active-revision>
+```
+
+The `ReapplyCondition` on the aux-init migration recreates `_logs` on next boot.
+Log history is lost — it was already unreadable.
 
 ## Failure modes & fixes
 
@@ -156,10 +215,52 @@ You should see `data.db/...` and `auxiliary.db/...` snapshot/WAL files updating 
 |---|---|---|
 | Pass 3 fails with `Domain ownership verification failed` | DNS records not propagated yet | Re-check `dig`, wait, re-run `azd up` |
 | Pass 1 fails with 403 on `listKeys` of LAW | Principal lacks reader/sharedKeys on `<law-name>` | Grant `Log Analytics Contributor` (or just `*/sharedKeys/action`) in `<shared-obs-rg>` |
-| App returns 502 for 60–90 s after deploy | Litestream restoring `data.db` from blob | Expected on cold start; startup probe allows up to 90 s |
-| `litestream replicate` logs auth errors | Storage key rotated | Rotate via `azd provision` — secret is re-fetched at deploy time |
+| App returns 502 briefly after deploy | New revision still starting | Expected; startup probe allows up to 90 s |
+| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb) |
+| Container crashloops with `SQLITE_BUSY (5)` | `/pb_data` mounted over SMB instead of NFS | SMB lacks POSIX byte-range locks. Storage must be Premium FileStorage + NFS, env VNet-integrated (`6a4f04df`) |
 | `customDomains` value rejected | Cert resource was deleted out-of-band | Set `CUSTOM_DOMAIN=` (empty) and re-deploy, then redo passes 2–3 |
 | Two replicas running (data corruption risk) | Someone bumped `maxReplicas` | Revert — SQLite is single-writer; `maxReplicas: 1` is enforced in [infra/modules/container-app.bicep](infra/modules/container-app.bicep) |
+
+## Litestream: why it is off, and what re-enabling would take
+
+Litestream was configured early on and **deliberately disabled on 2026-05-25**
+(`f9cac5e0`). Do not switch it back on without reading this — the failure mode
+was worse than having no replica at all.
+
+**Why it was turned off.** PocketBase's dashboard backup-restore performs an
+in-process `syscall.Exec` self-restart. The supervising `litestream` process
+survives that exec holding an open FD on the *pre-restore* inode, so it keeps
+replicating the orphaned file. A consented dashboard restore left a **10 KB
+malformed snapshot as the only replica**, and the entrypoint's cold-start restore
+would then write that corruption onto a fresh pod. Litestream was manufacturing
+bad backups and then restoring them.
+
+**The fix exists but was never wired up.** `0d82e286` added a fork-local
+`OnTerminate` hook that signals PPID before `execve`, so a supervisor can recycle
+Litestream across a restore:
+
+- [pre_restart_signal.go](pre_restart_signal.go) (unix) /
+  [pre_restart_signal_other.go](pre_restart_signal_other.go) (stub)
+- wired at [pocketbase.go](pocketbase.go) via `bindPreRestartSignal(pb)`
+- env: `PB_PRE_RESTART_SIGNAL` (SIGTERM|SIGUSR1|SIGHUP|SIGUSR2|SIGINT|SIGQUIT),
+  `PB_PRE_RESTART_DELAY_MS` (default 500). Unset = upstream behavior.
+
+Still outstanding if you ever want the replica back:
+
+1. Provision a **StorageV2** account with a blob container. The current
+   FileStorage account cannot host one, and `storage.bicep` dropped the blob
+   wiring in `6a4f04df`.
+2. Add `trap "kill -TERM $LITESTREAM_PID; wait $LITESTREAM_PID" USR1` to
+   [entrypoint.sh](entrypoint.sh) — it currently traps only `TERM INT`.
+3. Set `PB_PRE_RESTART_SIGNAL=SIGUSR1` and the three `LITESTREAM_*` vars on the
+   container app. `entrypoint.sh` and `litestream.yml` need no other changes.
+4. Write a test for the pre-restart hook — there is none, so its behavior is
+   unexercised.
+
+**Is it worth it?** Against a working daily backup cron the only real gain is
+RPO — seconds instead of up to 24 h. That matters here only if losing a day of
+passkey enrollments is unacceptable. Weigh that against re-entering a code path
+that has already caused one data-loss incident.
 
 ## Tear-down
 
@@ -176,6 +277,7 @@ azd down --purge
 - [infra/modules/acr.bicep](infra/modules/acr.bicep)
 - [infra/modules/storage.bicep](infra/modules/storage.bicep)
 - [infra/modules/container-app.bicep](infra/modules/container-app.bicep) — managed env, cert, ingress, app
-- [litestream.yml](litestream.yml) — replica config (reads `LITESTREAM_AZURE_ACCOUNT_*`)
-- [entrypoint.sh](entrypoint.sh) — restore → superuser upsert → replicate → serve
+- [infra/modules/network.bicep](infra/modules/network.bicep) — VNet + delegated subnet (required for NFS)
+- [litestream.yml](litestream.yml) — replica config, **inert**: no `LITESTREAM_*` env is set
+- [entrypoint.sh](entrypoint.sh) — (restore) → superuser bootstrap → (replicate) → serve; both parenthesized steps are skipped while `LITESTREAM_REPLICA_URL` is unset
 - [scripts/verify-dns.sh](scripts/verify-dns.sh) — generic DNS validator (CNAME + asuid TXT)
