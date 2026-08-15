@@ -175,9 +175,12 @@ is the one that proves the object actually landed.
 
 > **Backup failures can be silent.** `CreateBackup` reports errors through
 > `app.Logger()`, which writes to `auxiliary.db`. If that database is damaged the
-> error never reaches the log, and the only surviving alarm is the superuser
-> email from `sendSystemAlertToAllSuperusers` — which needs working SMTP. Treat
-> "no errors in the log" as weak evidence; check the bucket.
+> error may never reach the log — and note that the batch writer at
+> [core/base.go](core/base.go) swallows per-row write errors (it prints them to
+> stderr and returns `nil`, so the transaction still commits), meaning log loss
+> is silent and partial rather than a loud failure. The only other alarm is the
+> superuser email from `sendSystemAlertToAllSuperusers`, which needs working
+> SMTP. Treat "no errors in the log" as weak evidence; check the bucket.
 
 ### Restore (disaster recovery)
 
@@ -197,17 +200,50 @@ means recently enrolled passkeys, whose owners will need to re-register.
 
 `auxiliary.db` holds only the `_logs` table
 ([migrations/1640988000_aux_init.go](migrations/1640988000_aux_init.go)), so it is
-safe to discard. Symptom is `database disk image is malformed (11)` on every
-request-log write. Delete it and let PocketBase rebuild:
+safe to set aside. Symptom is `database disk image is malformed (11)` spamming
+the console on request-log writes.
+
+**Confirming it, without a shell.** In the dashboard, open *Logs* and read the
+newest entry's timestamp. If it is frozen days or months in the past while the
+console error is still streaming, logging is dead. Do not infer health from
+"I can see logs" — the UI happily renders frozen history. Corroborate on the
+volume: a healthy `auxiliary.db-wal` grows continuously; a **0-byte WAL beside a
+stale `auxiliary.db` mtime means nothing is being written**.
+
+**`az containerapp exec` needs a real TTY** and fails with
+`termios.error: (19, 'Operation not supported by device')` from a non-interactive
+shell. Wrap it, and note that nested `sh -c '...'` quoting does not survive the
+websocket — issue one plain command per call. The exec endpoint also rate-limits
+aggressively (HTTP 429, `retry-after: 600`), so batch your intent into as few
+calls as possible.
 
 ```sh
-az containerapp exec -g <rg-name> -n ca-<envName> --command \
-  "sh -c 'rm -f /pb_data/auxiliary.db /pb_data/auxiliary.db-wal /pb_data/auxiliary.db-shm'"
-az containerapp revision restart -g <rg-name> -n ca-<envName> --revision <active-revision>
+REV=$(az containerapp show -g <rg-name> -n ca-<envName> --query properties.latestReadyRevisionName -o tsv)
+
+# preserve rather than delete — matches the existing .recover-YYYY-MM-DD convention in /pb_data
+script -q /dev/null az containerapp exec -g <rg-name> -n ca-<envName> --revision "$REV" \
+  --command "mkdir -p /pb_data/.recover-$(date +%F)"
+script -q /dev/null az containerapp exec -g <rg-name> -n ca-<envName> --revision "$REV" \
+  --command "mv /pb_data/auxiliary.db /pb_data/auxiliary.db-wal /pb_data/auxiliary.db-shm /pb_data/.recover-$(date +%F)/"
+
+az containerapp revision restart -g <rg-name> -n ca-<envName> --revision "$REV"
 ```
 
 The `ReapplyCondition` on the aux-init migration recreates `_logs` on next boot.
-Log history is lost — it was already unreadable.
+Verify by confirming a fresh small `auxiliary.db` plus a **growing** WAL, and that
+new entries appear in the dashboard *Logs* view.
+
+**This recurs.** It has happened at least twice — `/pb_data/.recover-2026-06-09`
+is the first occurrence, and the replacement corrupted again three days later on
+**2026-06-12 at 00:00**, staying dead until 2026-08-15. The suspected cause is
+contention at midnight, where three jobs hit `auxiliary.db` at once:
+`__pbDBOptimize__` (`0 0 * * *`) runs `PRAGMA wal_checkpoint(TRUNCATE)` on the aux
+DB, `__pbLogsCleanup__` (`0 */6 * * *`) bulk-deletes from `_logs`, and the backup
+cron opens `AuxRunInTransaction` plus a second truncating checkpoint while
+archiving the same files — all over NFS. This is correlational, not proven.
+**Cheapest mitigation: move the backup cron off midnight** (e.g. `0 2 * * *` in
+*Settings → Backups*). It costs nothing and, if corruption stops recurring,
+confirms the diagnosis.
 
 ## Failure modes & fixes
 
