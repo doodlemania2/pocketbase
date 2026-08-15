@@ -257,6 +257,70 @@ confirms the diagnosis.
 | `customDomains` value rejected | Cert resource was deleted out-of-band | Set `CUSTOM_DOMAIN=` (empty) and re-deploy, then redo passes 2–3 |
 | Two replicas running (data corruption risk) | Someone bumped `maxReplicas` | Revert — SQLite is single-writer; `maxReplicas: 1` is enforced in [infra/modules/container-app.bicep](infra/modules/container-app.bicep) |
 
+## Telemetry — OTLP export to SigNoz
+
+PocketBase's logger writes to `auxiliary.db`. When that database broke on
+2026-06-12 every request log was dropped and nothing said so for two months
+(see [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb)).
+[core/logger_otel.go](core/logger_otel.go) adds a second, independent sink: the
+same records also go to the self-hosted OTLP collector, so a local-sink failure
+is visible immediately instead of silently.
+
+This follows the shared parish contract — `docs/observability/otlp-onboarding.md`
+in the **STFoA-Church** repo. Read that first; it is canonical if anything here
+disagrees.
+
+### Turning it on
+
+Everything is driven by GitHub repo variables plus one secret. With
+`OTLP_ENDPOINT` unset, export is disabled and PocketBase logs exactly as
+upstream does — no code path is entered.
+
+| Setting | Kind | Value |
+|---|---|---|
+| `OTLP_ENDPOINT` | variable | `https://otlp.thedoodleproject.net` (endpoint **root** — the SDK appends `/v1/logs`) |
+| `OTLP_AUTH_HEADER` | **secret** | `Authorization=Bearer <ingest-token>` |
+| `OTEL_SERVICE_NAME` | variable | `stfoa-auth` (default). One per app, and **never change it** — it is the key SigNoz groups on |
+| `OTEL_ENVIRONMENT` | variable | `production` (default) \| `staging` \| `development` |
+| `OTEL_MIN_LEVEL` | variable | optional `DEBUG`\|`INFO`\|`WARN`\|`ERROR` — see cost note below |
+
+Read the ingest token off the cluster and store it as a repo secret; it is one
+shared token for all three signal paths:
+
+```sh
+kubectl -n signoz get secret otlp-ingest-token -o jsonpath='{.data.token}' | base64 -d
+```
+
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` is set unconditionally in
+[infra/modules/container-app.bicep](infra/modules/container-app.bicep) whenever an
+endpoint is configured. Do not remove it. The collector is reached through a
+Cloudflare Tunnel carrying HTTP only — an SDK that defaults to gRPC on 4317
+exports nothing **and reports no error**; the app simply never appears in SigNoz.
+
+### Ingestion cost
+
+Every request is logged at INFO, and the startup/liveness probes hit
+`/api/health` every 10 s — roughly 8.6k records a day before any real traffic.
+Set `OTEL_MIN_LEVEL=WARN` to cap what crosses the wire. It does not affect what
+PocketBase stores locally, so the dashboard *Logs* view keeps full detail either
+way.
+
+### Verify
+
+```sh
+# 1. the gate rejects an unauthenticated request
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://otlp.thedoodleproject.net/v1/traces \
+  -H 'Content-Type: application/json' -d '{"resourceSpans":[]}'          # expect 401
+
+# 2. the app is exporting: exporter errors go to stderr, never through
+#    app.Logger() (that would feed failures back into the failing sink)
+az containerapp logs show -g <rg-name> -n ca-<envName> --tail 50 --type console | grep '\[otel\]'
+```
+
+Then find the service in SigNoz under `service.name=stfoa-auth` with the right
+`deployment.environment`. An empty `resourceSpans` array returns `200` without
+proving anything reached ClickHouse — only a real record does.
+
 ## Litestream: why it is off, and what re-enabling would take
 
 Litestream was configured early on and **deliberately disabled on 2026-05-25**

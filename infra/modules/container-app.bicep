@@ -58,6 +58,28 @@ param webauthnRpId string = ''
 @description('Comma-separated list of allowed WebAuthn origins (e.g. https://app.stfoafrisco.org). Empty = the app falls back to the AppURL origin at runtime.')
 param webauthnRpOrigins string = ''
 
+@description('OTLP collector ingest URL, e.g. https://otlp.thedoodleproject.net. Empty = telemetry export disabled entirely. Set the endpoint ROOT, not a signal path — the SDK appends /v1/logs itself.')
+param otlpEndpoint string = ''
+
+@description('Full OTLP auth header, i.e. "Authorization=Bearer <token>". Hold this in Key Vault and pass it as a reference; never commit the token.')
+@secure()
+param otlpAuthHeader string = ''
+
+@description('Stable service.name for this app in SigNoz. The onboarding contract requires one per app and it must never change — it is the key SigNoz groups on. Empty resolves to the default below.')
+param otelServiceName string = ''
+
+@description('deployment.environment value. Use only: production | staging | development. Staging and production post to the SAME collector, so this is the only thing telling them apart. Empty is permitted and resolves to production — an unset GitHub Actions variable arrives as an empty string, not as unset, so rejecting empty here would fail the deployment outright.')
+@allowed([
+  ''
+  'production'
+  'staging'
+  'development'
+])
+param otelEnvironment string = ''
+
+@description('Minimum log level exported to the collector (DEBUG|INFO|WARN|ERROR). Empty exports everything, which for this app is ~8.6k health-probe records/day. Local SQLite logging is unaffected either way.')
+param otelMinLevel string = ''
+
 // Reference the shared Log Analytics workspace (cross-RG) to fetch its shared key for Container Apps env wiring
 resource sharedLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: last(split(logAnalyticsWorkspaceId, '/'))
@@ -78,6 +100,14 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
 
 // RBAC: ACR Pull for container image access
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+
+// Resolve the telemetry identity defaults in bicep rather than relying on azd's
+// ${VAR=default} substitution: an unset GitHub Actions variable is passed to azd
+// as an empty string, so the substitution default never fires and the resource
+// attributes would ship blank — which lands this app in SigNoz's undifferentiated
+// stream, exactly what the onboarding contract exists to prevent.
+var resolvedOtelServiceName = empty(otelServiceName) ? 'stfoa-auth' : otelServiceName
+var resolvedOtelEnvironment = empty(otelEnvironment) ? 'production' : otelEnvironment
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(acr.id, identity.id, acrPullRoleId)
   scope: acr
@@ -168,6 +198,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         { name: 'pb-admin-email', value: pbAdminEmail }
       ], empty(pbAdminPassword) ? [] : [
         { name: 'pb-admin-password', value: pbAdminPassword }
+      ], empty(otlpAuthHeader) ? [] : [
+        { name: 'otlp-auth-header', value: otlpAuthHeader }
       ])
       ingress: {
         external: true
@@ -213,6 +245,23 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'WEBAUTHN_RP_ID', value: webauthnRpId }
           ], empty(webauthnRpOrigins) ? [] : [
             { name: 'WEBAUTHN_RP_ORIGINS', value: webauthnRpOrigins }
+          ], empty(otlpEndpoint) ? [] : [
+            { name: 'OTEL_EXPORTER_OTLP_ENDPOINT', value: otlpEndpoint }
+            // Not optional. The collector is reached through a Cloudflare Tunnel
+            // that carries HTTP only; an SDK defaulting to gRPC on 4317 exports
+            // nothing and reports no error — it simply never appears in SigNoz.
+            { name: 'OTEL_EXPORTER_OTLP_PROTOCOL', value: 'http/protobuf' }
+            // Both deployment.environment spellings on purpose: the SigNoz
+            // environment filter reads the bare key, the current OpenTelemetry
+            // semantic convention uses .name. Both cost nothing.
+            {
+              name: 'OTEL_RESOURCE_ATTRIBUTES'
+              value: 'service.name=${resolvedOtelServiceName},service.namespace=stfoa,deployment.environment=${resolvedOtelEnvironment},deployment.environment.name=${resolvedOtelEnvironment}'
+            }
+          ], empty(otlpEndpoint) || empty(otlpAuthHeader) ? [] : [
+            { name: 'OTEL_EXPORTER_OTLP_HEADERS', secretRef: 'otlp-auth-header' }
+          ], empty(otelMinLevel) ? [] : [
+            { name: 'PB_OTEL_MIN_LEVEL', value: otelMinLevel }
           ])
           probes: [
             {
