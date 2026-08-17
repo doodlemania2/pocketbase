@@ -299,6 +299,27 @@ Update the **Sync Status** section at the top of this file (`FORK_SYNC.md`) with
 - Today's date
 - Test status (including any allowlisted flakes)
 
+> **The `**Current:**` line is machine-read — keep its shape.**
+> `.github/workflows/upstream-check.yml` parses the synced version out of the
+> first line matching:
+>
+> ```
+> **Current:** synced to upstream **vX.Y.Z** ...
+> ```
+>
+> That is how the weekly watcher knows whether to file a sync issue, and how it
+> auto-closes issues for versions already synced. Reword the rest of the
+> paragraph freely, but keep that prefix and the `**vX.Y.Z**` bold-tag intact. If
+> the parse fails the workflow **errors out loudly** rather than silently
+> mis-reporting — check the run log if the Monday job goes red.
+>
+> This replaced an older check that grepped `origin` for a `synced-vX.Y.Z` tag.
+> That tag was never pushed for any version, so the watcher filed a duplicate
+> issue every Monday and never closed one — nine stale issues had piled up
+> (#22–#31) by v0.39.11. **Do not reintroduce the tag scheme**; pushing a
+> `synced-*` tag also triggers a pointless full `basebuild` run, since
+> `release.yaml` fires on a bare `push:`.
+
 Also add a new row to the sync-history table, noting any non-trivial upstream
 additions (new auth option fields, new tokens, etc.) that required fork-side
 follow-up.
