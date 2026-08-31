@@ -6,8 +6,8 @@ How to keep this fork in sync with upstream PocketBase releases.
 
 **Current:** synced to upstream **v0.40.1** (`bc8ffed4`) on 2026-08-31 (a
 two-version jump across a **minor** release, v0.40.0 + v0.40.1). WebAuthn
-library `go-webauthn/webauthn` held at **v0.17.4** — v0.18.0 is available but
-is a **breaking** release, deliberately deferred (see below). Tests: `go test
+library `go-webauthn/webauthn` **v0.18.0** (bumped after the sync — see the
+note below; the sync itself landed on v0.17.4). Tests: `go test
 ./...` 33/34 packages green on **both** branches, the only failures being the
 allowlisted macOS `fsnotify` watcher flakes (`TestNotifyWatcher_*`, 2/3 pass
 on isolated re-run). `golangci-lint` **v2.13.2** and `gofmt -l`: **0 issues on
@@ -38,19 +38,50 @@ three security headers present (`Cross-Origin-Opener-Policy`,
    Fixed as `unnecessarily` rather than excluding the linter fork-wide. Expect
    this class of issue whenever upstream's linter config outpaces their own CI.
 
-**`go-webauthn/webauthn` v0.18.0 deferred — it is breaking.** `go list -m -u`
-offers v0.18.0 (and `go-webauthn/x` v0.3.0), but the release notes list real
-API breaks: `RegistrationOption`/`LoginOption` now return errors, the
-`ConfigProvider` interface gains required `GetOpaqueOrigins`,
-`GetAttestationPolicy` and `GetSignaturePolicy` methods, a `rpOpaqueOrigins`
-parameter was added to the three `protocol.*Verify` signatures, and
-`protocol.AuthenticationExtensions` changed from a map to a struct (which also
-changes `SessionData` encoding). The runbook's Step 3b rule is "bump if
-patch/minor and **non-breaking**", so it was held back rather than bundled into
-an already-large Go 1.27 / json-v2 sync. The `SessionData` wire-format break is
-low-risk for this fork specifically — `storeWebAuthnSession` keeps sessions in
-a bounded in-memory store with a short TTL, never on disk — so the bump is a
-contained, self-standing piece of work. Tracked as its own GitHub issue.
+**`go-webauthn/webauthn` v0.18.0 — deferred during the sync, then taken
+separately (issue #34).** It is a genuinely breaking release
+(`RegistrationOption`/`LoginOption` now return errors, `ConfigProvider` gains
+required `GetOpaqueOrigins`/`GetAttestationPolicy`/`GetSignaturePolicy`, a
+`rpOpaqueOrigins` parameter was added to the three `protocol.*Verify`
+signatures, and `protocol.AuthenticationExtensions` became a struct), so it was
+kept out of the already-large Go 1.27 / json-v2 sync and done as its own change
+on the synced fork. **It needed no call-site changes** — the fork never passes
+registration/login options, never implements `ConfigProvider`, never calls the
+`Verify` functions directly, and never touches the extension types. The
+`SessionData` encoding break is inert here because `storeWebAuthnSession` keeps
+sessions in a bounded in-memory store and never persists them.
+
+One behaviour change did need handling: **v0.18.0 rejects an IP address as the
+RP-ID**, which v0.17.4 accepted. `isLocalWebAuthnHost` allows `127.0.0.1`/`::1`
+so local dev can run over plain http, so `AppURL=http://127.0.0.1:8090` would
+now fail on every WebAuthn endpoint. Production is unaffected
+(`auth.stfoafrisco.org` is a domain) and an IP RP-ID could never complete a real
+ceremony anyway (browsers refuse one). `initWebAuthn` now rejects it itself with
+an actionable message, which also makes the behaviour independent of the library
+version; the check runs *after* the `WEBAUTHN_RP_ID` override, so an IP-bound
+app URL plus `WEBAUTHN_RP_ID=localhost` still works.
+
+**The WebAuthn ceremonies now have real end-to-end test coverage.** Before this,
+all 29 WebAuthn scenarios were guard/error-path tests and *nothing exercised a
+successful registration or login* — a library upgrade could have silently broken
+passkeys with a fully green suite.
+`apis/record_auth_with_webauthn_ceremony_test.go` adds a software authenticator
+that does real ECDSA P-256 signing and drives the actual HTTP endpoints:
+register-then-login, wrong-key rejection, wrong-origin rejection, replay
+rejection, sign-count regression detection, credential round-trip, and the MFA
+first-factor path. Writing it immediately caught a latent bug on the feat layer
+(see below). Run it on every future `go-webauthn` bump.
+
+**Layer note — the rereadable-body fix moved from `deploy/azure` up to `feat`.**
+go-webauthn drains *and closes* the request body when parsing a ceremony
+response, which destroys PocketBase's `RereadableReadCloser` buffer; any later
+read (notably `RequestInfo()`, which `recordAuthResponse` needs for the auth
+rule) then fails and a fully verified assertion returns 400. `deploy/azure`
+already carried the fix (`readWebAuthnFinishBody` + `ParseCredential*ResponseBytes`),
+so **production was never affected**, but the feat layer was broken in isolation.
+The fix now lives on `feat` where the feature lives, and the deploy delta for
+`apis/record_auth_with_webauthn.go` is consequently **empty** — one less file to
+replay every sync.
 
 **`npm install` vs `npm ci` — still applies.** Step 4's `ui/dist` rebuild must
 use `npm ci`, never `npm install`. The local toolchain is Node **v22.22.2** /
@@ -221,6 +252,13 @@ If a newer version is available:
 
 4. Commit as `deps(webauthn): bump go-webauthn/webauthn vA -> vB` with the
    relevant release notes summarized in the body.
+4b. **Run the ceremony suite** — it is the only thing that exercises a
+   *successful* registration/login with real signatures, and the 29
+   scenario tests will stay green even if the ceremony is completely broken:
+
+   ```bash
+   go test -count=1 -run 'TestWebAuthnCeremony|TestInitWebAuthn' ./apis/
+   ```
 5. Update the WebAuthn version in the **Sync Status** section at the top of this
    file to match.
 
