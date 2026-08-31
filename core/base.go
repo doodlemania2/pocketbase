@@ -148,6 +148,7 @@ type BaseApp struct {
 	onMailerRecordEmailChangeSend   *hook.Hook[*MailerRecordEvent]
 	onMailerRecordOTPSend           *hook.Hook[*MailerRecordEvent]
 	onMailerRecordAuthAlertSend     *hook.Hook[*MailerRecordEvent]
+	onMailerRecordPasskeyResetSend  *hook.Hook[*MailerRecordEvent]
 
 	// filesystem event hooks
 	//
@@ -308,6 +309,7 @@ func (app *BaseApp) initHooks() {
 	app.onMailerRecordEmailChangeSend = &hook.Hook[*MailerRecordEvent]{}
 	app.onMailerRecordOTPSend = &hook.Hook[*MailerRecordEvent]{}
 	app.onMailerRecordAuthAlertSend = &hook.Hook[*MailerRecordEvent]{}
+	app.onMailerRecordPasskeyResetSend = &hook.Hook[*MailerRecordEvent]{}
 
 	// filesystem event hooks
 	app._onFilesystemNewWriter = &hook.Hook[*FilesystemNewWriterEvent]{}
@@ -1063,9 +1065,12 @@ func (app *BaseApp) OnMailerRecordEmailChangeSend(tags ...string) *hook.TaggedHo
 func (app *BaseApp) OnMailerRecordOTPSend(tags ...string) *hook.TaggedHook[*MailerRecordEvent] {
 	return hook.NewTaggedHook(app.onMailerRecordOTPSend, tags...)
 }
-
 func (app *BaseApp) OnMailerRecordAuthAlertSend(tags ...string) *hook.TaggedHook[*MailerRecordEvent] {
 	return hook.NewTaggedHook(app.onMailerRecordAuthAlertSend, tags...)
+}
+
+func (app *BaseApp) OnMailerRecordPasskeyResetSend(tags ...string) *hook.TaggedHook[*MailerRecordEvent] {
+	return hook.NewTaggedHook(app.onMailerRecordPasskeyResetSend, tags...)
 }
 
 // -------------------------------------------------------------------
@@ -1540,7 +1545,9 @@ func (app *BaseApp) initLogger() error {
 		}
 	})
 
-	app.logger = slog.New(handler)
+	// fork-local: tee to an OTLP collector when one is configured
+	// (no-op otherwise) — see core/logger_otel.go
+	app.logger = slog.New(app.initOTelLogger(handler))
 
 	// write all remaining logs before ticker.Stop to avoid races with ResetBootstrap user calls
 	app.OnTerminate().Bind(&hook.Handler[*TerminateEvent]{
