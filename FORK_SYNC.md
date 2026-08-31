@@ -4,39 +4,63 @@ How to keep this fork in sync with upstream PocketBase releases.
 
 ## Sync Status
 
-**Current:** synced to upstream **v0.39.11** (`5d217ddb`) on 2026-08-14 (a
-two-version jump, v0.39.10 + v0.39.11). WebAuthn library
-`go-webauthn/webauthn` **v0.17.4** (already latest — Step 3b found no newer
-release); `modernc.org/sqlite` bumped **v1.54.0 → v1.55.0** by upstream, which
-also updated `modernc_versions_check.go` itself (libc unchanged at v1.74.1) —
-no fork-side follow-up needed. Tests: full `go test ./...` green on
-`feat/webauthn-passkey-support` (34/34 packages, first run, zero flakes);
-`deploy/azure` 33/34 with the allowlisted `core/TestNotifyWatcher_SettingsUpdate`
-macOS `fsnotify` flake, which passed 3/3 on isolated re-run. `golangci-lint`
-v2.6.2 and `gofmt -l`: **0 issues on both branches**. WebAuthn/Passkey suite
-green (`go test -run 'WebAuthn|Webauthn|Passkey' ./apis/... ./core/...`).
-The Docker build/health-check smoke test runs in CI — no local container
-runtime was available this sync either, so it was deferred to CI; a **native**
-binary smoke test was run instead (`go build ./examples/base` + `serve`):
-`/api/health` 200, the deploy-layer `/passkeys` self-service page 200, and the
-embedded admin UI `/_/` 200.
+**Current:** synced to upstream **v0.40.1** (`bc8ffed4`) on 2026-08-31 (a
+two-version jump across a **minor** release, v0.40.0 + v0.40.1). WebAuthn
+library `go-webauthn/webauthn` held at **v0.17.4** — v0.18.0 is available but
+is a **breaking** release, deliberately deferred (see below). Tests: `go test
+./...` 33/34 packages green on **both** branches, the only failures being the
+allowlisted macOS `fsnotify` watcher flakes (`TestNotifyWatcher_*`, 2/3 pass
+on isolated re-run). `golangci-lint` **v2.13.2** and `gofmt -l`: **0 issues on
+both branches**. WebAuthn/Passkey suite green. Docker was unavailable locally
+again, so the container smoke test is deferred to CI; a **native** binary smoke
+test passed instead (`go build ./examples/base` + `serve`): `/api/health` 200,
+the deploy-layer `/passkeys` page 200, the embedded admin UI `/_/` 200, and all
+three security headers present (`Cross-Origin-Opener-Policy`,
+`Referrer-Policy`, `Permissions-Policy`).
 
-**`npm install` vs `npm ci` — new gotcha this sync.** Step 4's `ui/dist`
-rebuild must use `npm ci`, never `npm install`. The local toolchain is Node
-**v22.22.2** / npm **10.9.7** while `release.yaml` pins `node-version:
-'>=25.2.1'`; npm 10 rewrites `ui/package-lock.json` and **strips the `libc`
-fields** (`glibc`/`musl`) from the platform-specific optional `rolldown`
-binaries that npm 11 writes. Committing that lock would break the Linux CI
-install. If you see a lockfile diff that is pure `-  "libc": [` deletions,
-`git checkout -- ui/package-lock.json` and re-install with `npm ci`.
+**This sync required three fork-side follow-ups.** v0.40.0 moved upstream to
+**Go 1.27** and the **`encoding/json/v2`** stdlib package, which cascades:
 
-**Dependabot vite/postcss bump is now obsolete.** The v0.39.9 follow-up commit
-`deps(ui): bump vite 8.0.14 -> 8.1.5, postcss 8.5.15 -> 8.5.23` was **dropped**
-during this rebase: upstream v0.39.11's own `ui/package-lock.json` already
-ships **vite 8.2.1 / postcss 8.5.26**, which supersedes it. After the go.mod
-and lockfile conflicts were resolved the commit retained nothing but stale
-`ui/dist` hashes, so it was reset away and replaced by a single clean
-`vite build`.
+1. **`Dockerfile`: `golang:1.25-alpine` -> `golang:1.27-alpine`.** `go.mod` now
+   declares `go 1.27`; the old builder image cannot build the module at all.
+   Nothing in the fork's own test suite catches this — only the CI Docker build
+   does. Check this pin on every upstream Go-version bump.
+2. **`.github/workflows/test.yml`: golangci-lint `v2.6.2` -> `v2.13.2`** (and
+   `golangci-lint-action` v7 -> v9, `actions/setup-go` v6 -> v7). Upstream
+   renamed the `gomodguard` linter to **`gomodguard_v2`** in `golangci.yml`,
+   and v2.6.2 does not merely warn — it aborts with `unknown linters:
+   'gomodguard_v2'`. That name needs golangci-lint **>= v2.12.0**.
+3. **Two upstream comment typos had to be fixed** (`style: fix misspell lint
+   failures in upstream comments`, on the feat branch). At >= v2.12.0 the
+   `misspell` linter flags `unnecessery` in `tools/picker/pick.go` and
+   `tools/router/event.go`. Both are still present on `upstream/develop`, so
+   upstream evidently does not gate CI on `misspell` while our `test.yml` does.
+   Fixed as `unnecessarily` rather than excluding the linter fork-wide. Expect
+   this class of issue whenever upstream's linter config outpaces their own CI.
+
+**`go-webauthn/webauthn` v0.18.0 deferred — it is breaking.** `go list -m -u`
+offers v0.18.0 (and `go-webauthn/x` v0.3.0), but the release notes list real
+API breaks: `RegistrationOption`/`LoginOption` now return errors, the
+`ConfigProvider` interface gains required `GetOpaqueOrigins`,
+`GetAttestationPolicy` and `GetSignaturePolicy` methods, a `rpOpaqueOrigins`
+parameter was added to the three `protocol.*Verify` signatures, and
+`protocol.AuthenticationExtensions` changed from a map to a struct (which also
+changes `SessionData` encoding). The runbook's Step 3b rule is "bump if
+patch/minor and **non-breaking**", so it was held back rather than bundled into
+an already-large Go 1.27 / json-v2 sync. The `SessionData` wire-format break is
+low-risk for this fork specifically — `storeWebAuthnSession` keeps sessions in
+a bounded in-memory store with a short TTL, never on disk — so the bump is a
+contained, self-standing piece of work. Tracked as its own GitHub issue.
+
+**`npm install` vs `npm ci` — still applies.** Step 4's `ui/dist` rebuild must
+use `npm ci`, never `npm install`. The local toolchain is Node **v22.22.2** /
+npm **10.9.7** while `release.yaml` pins `node-version: '>=25.2.1'`; npm 10
+rewrites `ui/package-lock.json` and **strips the `libc` fields**
+(`glibc`/`musl`) from the platform-specific optional `rolldown` binaries that
+npm 11 writes. Committing that lock would break the Linux CI install. If you
+see a lockfile diff that is pure `-  "libc": [` deletions, `git checkout --
+ui/package-lock.json` and re-install with `npm ci`. Verified unchanged on both
+branches this sync.
 
 ## CI coverage
 
@@ -62,10 +86,13 @@ Workflows and what actually gates a push:
 > Also fixed at the same time: the lint step pinned
 > `golangci/golangci-lint-action@v6`, which installs golangci-lint **v1** — but
 > `golangci.yml` is schema `version: "2"`. It would have failed to parse on the
-> first real run. Now `@v7` with an explicit `version: v2.6.2`.
+> first real run. Fixed then as `@v7` with `version: v2.6.2`; the v0.40.1 sync
+> moved it again to `@v9` with `version: v2.13.2`, because upstream renamed
+> `gomodguard` to `gomodguard_v2` and v2.6.2 aborts on the unknown name.
 
 | Synced to | Date | WebAuthn | Notes |
 | --- | --- | --- | --- |
+| v0.40.1 (`bc8ffed4`) | 2026-08-31 | v0.17.4 | Two-version jump across a **minor** release (v0.40.0 `da183027` + v0.40.1). Large: 177 files, ~8.2k insertions. **The headline change is infrastructural** — upstream moved to **Go 1.27** (`go.mod` `go 1.25.0`->`go 1.27`) and migrated the whole codebase from `encoding/json` to **`encoding/json/v2`**, which is stable in 1.27 and needs no `GOEXPERIMENT`. `Marshal` calls now pass `json.Deterministic(true)`, and json/v2 normalizes empty slices to `[]` rather than `null`, which rewrote many test fixtures (e.g. `"providers":[]`, `"identityFields":[]` in `core/collection_model_test.go`). Other backend work: experimental backup optimizations (zip close + copy wrapped in a mutex, concurrent DB pool for the backup copy), a new `DELETE /api/logs` **truncate endpoint** (`apis/logs.go` `logsTruncate`) plus a `logs.maxDataSize` setting, `Store.Keys()`, `Record.GetInt64()`, `filesystem.NewWriter`, `Cross-Origin-Opener-Policy: same-origin` added to the default security headers, OAuth2 providers config-merge fix ([#7815](https://github.com/pocketbase/pocketbase/issues/7815)), and invalid-UTF8 replacement enabled by default for the custom JSON types. Deps: `modernc.org/sqlite` v1.55.0->v1.57.0 (with `_defensive=1` now appended to the pragmas in `core/db_connect.go`), `modernc.org/libc` v1.74.1->v1.74.4, `memory` v1.11.0->v1.12.0 — `modernc_versions_check.go` was bumped by upstream itself; goja 20260722->20260806; `dlclark/regexp2/v2` 2.5.2->2.7.1; `gabriel-vasile/mimetype` 1.4.13->1.4.15. **Three fork-side follow-ups were required** — the `Dockerfile` Go builder image, the CI `golangci-lint` pin (`gomodguard`->`gomodguard_v2`), and two upstream `misspell` typos; all three are written up in the Sync Status section above. **`go-webauthn/webauthn` v0.18.0 was deliberately deferred as breaking** (also detailed above). **Rebase conflicts** on `feat`: `go.mod` x1 + `go.sum` x1 (standard "take upstream versions + re-add the webauthn indirects", then `go mod tidy`), `core/collection_model_test.go` x3 (the json/v2 `[]` normalization vs the fork's `webauthn` / `passkeyReset*` fixture keys), and `apis/middlewares.go` x1 (upstream's new COOP header vs the fork's `Referrer-Policy` + `Permissions-Policy` — **both sides kept**, verified live in the smoke test). The three `chore(ui): regenerate ui/dist` commits were dropped and replaced by one fresh `vite build`. **Deploy-rebuild overlap: non-empty and the largest yet — 14 files** (`.github/workflows/release.yaml`, `apis/logs.go`, `core/app.go`, `core/base.go`, `core/collection_model.go`, `core/collection_model_auth_options.go`, `core/collection_model_test.go`, `go.mod`, `go.sum`, `plugins/jsvm/binds_test.go`, `plugins/migratecmd/migratecmd_test.go`, `pocketbase.go`, `README.md`, `tests/app.go`). `git apply --3way` fell back to direct application and left 4 conflicted files, all resolved keeping both sides: `apis/logs.go` (upstream's `logsTruncate` + the fork's error-message enrichment), `tests/app.go` (upstream's commented-out filesystem hook stubs + the fork's `OnMailerRecordPasskeyResetSend` binding), `go.mod` (upstream versions + the OTLP indirects), `core/collection_model_test.go` (as above), and `README.md` (took the fork's rewrite wholesale — it carries no Go-version references). Verified post-rebuild: all 6 token-config secrets redacted in `core/collection_model.go` (5 upstream + fork `PasskeyResetToken`), no `go-ozzo` import, every deploy-only file present, and the rebuilt deploy delta touches **exactly** the same 62-file set as before the sync. Upstream still has **no** `PasskeyResetToken` — Step 2 HIGH-risk redaction warning dormant. |
 | v0.39.11 (`5d217ddb`) | 2026-08-14 | v0.17.4 | Two-version jump (v0.39.10 `0a74d2f2` + v0.39.11). Small release — **3 backend Go files touched in total**. `core/field_file.go`: `FileField.toSliceValue` now nil-guards `*filesystem.File` and `[]*filesystem.File` entries so a non-initialized `*filesystem.File` no longer panics. `pocketbase.go`: [#7781](https://github.com/pocketbase/pocketbase/issues/7781) **reverted** the v0.39.7 `routine.SafeWrap`/`FireAndForget` autorecover wrapping for the two CLI goroutines in `Execute()` (signal listener + `RootCmd.Execute`) back to plain `go func()` — the panic-recover swallowed CLI command panics. `modernc_versions_check.go`: `expectedDriverVersion` v1.54.0→v1.55.0, bumped by upstream itself alongside `modernc.org/sqlite`; libc stays v1.74.1. Deps: `golang.org/x/{crypto 0.54→0.55, image 0.44→0.45, net 0.57→0.58, mod 0.37→0.40, text 0.40→0.41, tools 0.47→0.49}`; release workflow min Go 1.26.5→1.26.6; js-sdk `pocketbase` 0.27.0→0.27.3; `vite.config.js` `__dirname`→`import.meta.dirname`. UI: logs chart loading placeholder + staggered chart init, API preview example fixes ([#7782](https://github.com/pocketbase/pocketbase/issues/7782)) incl. verification-request samples, relation-field collection editing on a duplicated collection, sortable/dropdown-keyboard-nav/codeEditor fixes, shablon update. **Rebase conflicts**: `go.mod` ×1 (standard "take upstream versions + re-add `tinylib/msgp`/`x448/float16` webauthn indirects" resolution) and `ui/dist` rename/rename churn ×2 — both `ui/dist` regenerate commits were dropped and replaced by one fresh `vite build`; the Dependabot `vite`/`postcss` bump commit was dropped as superseded by upstream's own lockfile (see Sync Status). **Deploy-rebuild overlap: non-empty** — deploy's genuine delta touches 2 upstream-changed files, `.github/workflows/release.yaml` (deploy adds a top-of-file `permissions: contents: write`; upstream bumped `go-version` at line 34) and `pocketbase.go` (deploy adds `bindPreRestartSignal(pb)` in `NewWithConfig` at line 161; upstream's revert is in `Execute()` at lines 191/200). Both pairs of hunks are disjoint, `git apply --3way` exited 0, and the rebuilt files carry both sides — verified by grep. Verified post-rebuild: all 6 token-config secrets redacted in `core/collection_model.go` (5 upstream + fork `PasskeyResetToken`), no `go-ozzo` import, and every deploy-only file (`Dockerfile`, `infra/main.bicep`, `entrypoint.sh`, `litestream.yml`, `azure.yaml`, `apis/record_auth_passkey_reset_*.go`) present. Upstream still has **no** `PasskeyResetToken` — Step 2 HIGH-risk redaction warning dormant. |
 | v0.39.9 (`0cbfc046`) | 2026-07-27 | v0.17.4 | Small deps/UI release — **zero backend Go logic changes**. Upstream touched only `CHANGELOG*`, `go.mod`/`go.sum`, `tools/search/filter_test.go`, and 4 `ui/` source files. Deps: goja 20260701→20260722 (fixes the reported `regexp2` dep regression for empty-string matches with lookahead patterns; pulls `dlclark/regexp2/v2` 2.2.2→2.5.2), `ganigeorgiev/fexpr` v0.5.0→v0.6.0 (large-string-literal optimization + control-character handling — `tools/search/filter_test.go` expectations updated upstream to match), `google/pprof` bumped. UI: `Shift+Click` range bulk selection workaround for Firefox ([#7771](https://github.com/pocketbase/pocketbase/issues/7771)) across `logsList.js`/`recordsList.js`/`pageExportCollections.js`. Rebase conflicts were confined to `go.mod` (×2, both the standard "take upstream versions + re-add `go-webauthn`" resolution) and `go.sum` (×2, resolved with `go mod tidy`); the two `ui/dist` regenerate commits went empty and were dropped, replaced by one fresh `vite build`. **Deploy-rebuild overlap: empty** — deploy's genuine delta touches none of the upstream-changed files, so the Step 4 shortcut applied cleanly (`git apply --3way` exit 0) and the rebuilt `deploy/azure` tree differs from the previous one by *exactly* the upstream v0.39.9 delta. Verified post-rebuild: all 6 token-config secrets redacted in `core/collection_model.go` (5 upstream + fork `PasskeyResetToken`) and no `go-ozzo` import remained. Upstream still has **no** `PasskeyResetToken` — Step 2 HIGH-risk redaction warning dormant. |
 | v0.39.8 (`cc4e8570`) | 2026-07-20 | v0.17.4 | Two-version jump (v0.39.7 + v0.39.8). **v0.39.7**: upstream replaced `github.com/go-ozzo/ozzo-validation` with the `github.com/pocketbase/ozzo-validation` fork (original library changed ownership) — this is most of the 6k-line diff (import-path churn across ~90 files). Required **fork-side follow-up**: swap the `go-ozzo` import for the `pocketbase` fork in every fork-added file — `apis/record_auth_with_webauthn.go` (feat) and `apis/record_auth_passkey_reset_{confirm,request}.go` (deploy); go.mod resolved to drop `go-ozzo`, keep `go-webauthn` + `pocketbase/ozzo`, `go mod tidy` swapped the go.sum hashes. Also v0.39.7: internal worker goroutines wrapped in `routine.SafeWrap` (panic→error, security fix [#7762]); View collection `*` validator + friendlier field errors ([#7761]); import-collection `fields` access fix ([#7760]). **v0.39.8**: JSVM `$app` global reset fix for pooled executors; `modernc.org/sqlite` v1.52→v1.54.0 (SQLite 3.53.3); `golang.org/x/*` indirect security bumps; UI number-input leading-0 + `Shift+Click` range select. **Deploy-rebuild overlap (non-empty this sync)**: deploy's genuine delta touched 5 upstream-changed files — `core/base.go`, `core/collection_model.go`, `core/collection_model_auth_options.go`, `plugins/jsvm/binds_test.go`, `pocketbase.go`. `git apply --3way` fell back to direct application and landed every hunk cleanly (disjoint regions); verified post-apply that the 6-token redaction (5 upstream + fork `PasskeyResetToken`) survived in `collection_model.go` and no `go-ozzo` import remained. Upstream still has **no** `PasskeyResetToken` — Step 2 HIGH-risk redaction warning dormant. |
@@ -335,9 +362,17 @@ follow-up.
 - [ ] `make test` passes on `feat/webauthn-passkey-support`
 - [ ] `make test` passes on `deploy/azure`
 - [ ] `make lint` clean on **both** branches — `golangci.yml` is schema v2, so
-      you need golangci-lint v2 (`go install
-      github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2`). Fork-added
-      files drift out of gofmt easily during rebases (import regrouping).
+      you need golangci-lint v2 at the version `test.yml` pins (`go install
+      github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2`) — and at
+      least v2.12.0, since `golangci.yml` names the `gomodguard_v2` linter.
+      Keep this in step with the `version:` pin in `.github/workflows/test.yml`.
+      Fork-added files drift out of gofmt easily during rebases (import
+      regrouping).
+- [ ] **If upstream bumped the `go` directive in `go.mod`**, bump the builder
+      image in `Dockerfile` (`FROM golang:X.Y-alpine`) to match, plus the
+      `Requires Go X.Y+` line in `CLAUDE.md` and the image reference in
+      `.github/copilot-skills/pocketbase-fork/SKILL.md`. Nothing in `go test`
+      catches a stale builder image — only the CI Docker build does.
 - [ ] `docker build` succeeds on `deploy/azure`
 - [ ] Health check passes on built container
 - [ ] WebAuthn endpoints respond correctly
