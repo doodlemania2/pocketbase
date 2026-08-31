@@ -93,12 +93,12 @@ migrate((app) => {
         "type": "text"
       },
       {
-        "exceptDomains": null,
+        "exceptDomains": [],
         "help": "",
         "hidden": false,
         "id": "email@TEST_RANDOM",
         "name": "email",
-        "onlyDomains": null,
+        "onlyDomains": [],
         "presentable": false,
         "required": true,
         "system": true,
@@ -210,7 +210,7 @@ migrate((app) => {
 package _test_migrations
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 
 	"github.com/pocketbase/pocketbase/core"
 	m "github.com/pocketbase/pocketbase/migrations"
@@ -285,12 +285,12 @@ func init() {
 					"type": "text"
 				},
 				{
-					"exceptDomains": null,
+					"exceptDomains": [],
 					"help": "",
 					"hidden": false,
 					"id": "email@TEST_RANDOM",
 					"name": "email",
-					"onlyDomains": null,
+					"onlyDomains": [],
 					"presentable": false,
 					"required": true,
 					"system": true,
@@ -566,12 +566,12 @@ migrate((app) => {
         "type": "text"
       },
       {
-        "exceptDomains": null,
+        "exceptDomains": [],
         "help": "",
         "hidden": false,
         "id": "email3885137012",
         "name": "email",
-        "onlyDomains": null,
+        "onlyDomains": [],
         "presentable": false,
         "required": true,
         "system": true,
@@ -679,7 +679,7 @@ migrate((app) => {
 package _test_migrations
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 
 	"github.com/pocketbase/pocketbase/core"
 	m "github.com/pocketbase/pocketbase/migrations"
@@ -761,12 +761,12 @@ func init() {
 					"type": "text"
 				},
 				{
-					"exceptDomains": null,
+					"exceptDomains": [],
 					"help": "",
 					"hidden": false,
 					"id": "email3885137012",
 					"name": "email",
-					"onlyDomains": null,
+					"onlyDomains": [],
 					"presentable": false,
 					"required": true,
 					"system": true,
@@ -1081,7 +1081,7 @@ migrate((app) => {
 package _test_migrations
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 
 	"github.com/pocketbase/pocketbase/core"
 	m "github.com/pocketbase/pocketbase/migrations"

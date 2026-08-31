@@ -103,7 +103,7 @@ MFA: WebAuthn counts as a valid MFA method (`MFAMethodWebAuthn = "webauthn"`).
 docker build -t pocketbase-fork .
 ```
 
-Multi-stage: `golang:1.25-alpine` (build) -> `alpine:3` (runtime with Litestream).
+Multi-stage: `golang:1.27-alpine` (build) -> `alpine:3` (runtime with Litestream).
 
 ### Environment Variables
 

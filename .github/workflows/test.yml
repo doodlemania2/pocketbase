@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -29,9 +29,12 @@ jobs:
       - name: Run linter
         # golangci.yml is schema `version: "2"`, which requires golangci-lint v2
         # (action v7+). The old action@v6 installs v1 and fails to parse it.
-        uses: golangci/golangci-lint-action@v7
+        # Upstream v0.40.0 renamed the `gomodguard` linter to `gomodguard_v2`,
+        # which v2.6.2 rejects ("unknown linters: 'gomodguard_v2'") -- that name
+        # needs golangci-lint >= v2.12.0.
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.6.2
+          version: v2.13.2
           args: -c ./golangci.yml
 
   docker-build:

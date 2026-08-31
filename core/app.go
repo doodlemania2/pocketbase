@@ -1272,6 +1272,20 @@ type App interface {
 	OnMailerRecordOTPSend(tags ...string) *hook.TaggedHook[*MailerRecordEvent]
 
 	// ---------------------------------------------------------------
+	// Filesystem event hooks
+	// (not publicly exposed until file_field refactoring)
+	// ---------------------------------------------------------------
+
+	// onFilesystemNewWriter is an internal hook for app.NewFilesystem()
+	// instances that is triggered on every storage filesystem writer initialization
+	// (aka. whenever attempting to create a new file).
+	onFilesystemNewWriter() *hook.Hook[*FilesystemNewWriterEvent]
+
+	// onFilesystemDelete is an internal hook for app.NewFilesystem()
+	// instances that is triggered for every storage file delete call.
+	onFilesystemDelete() *hook.Hook[*FilesystemDeleteEvent]
+
+	// ---------------------------------------------------------------
 	// Realtime API event hooks
 	// ---------------------------------------------------------------
 

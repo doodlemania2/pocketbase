@@ -23,7 +23,7 @@ make jstypes       # regenerate jsvm TS type declarations
 - Single test: `go test -run TestRecordAuthWithWebAuthnRegisterBegin ./apis/...`
 - WebAuthn suite: `go test -run 'WebAuthn|Webauthn' ./apis/... ./core/...`
 - Run the app locally: `cd examples/base && go run main.go serve` (serves on http://localhost:8090 with the embedded admin UI)
-- Requires Go 1.25+.
+- Requires Go 1.27+.
 
 ### Admin UI (`ui/`)
 

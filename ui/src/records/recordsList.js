@@ -107,7 +107,10 @@ window.app.components.recordsList = function(propsArg = {}) {
                 relExpands.push(field.name);
             }
 
-            let requestFields = fieldsWithExcerpt(props.collection.id, relationFields);
+            // disable for now since loading the entire json often tends
+            // to be faster with encoding/json/v2 because it can be directly streamed
+            // const requestFields = fieldsWithExcerpt(props.collection.id, relationFields);
+            const requestFields = undefined;
 
             // allow sorting by the top level relation presentable fields
             let normalizedSort = props.sort || undefined;
