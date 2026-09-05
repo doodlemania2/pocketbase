@@ -20,6 +20,16 @@ func TestParseIndex(t *testing.T) {
 			`invalid`,
 			dbutils.Index{},
 		},
+		// no names
+		{
+			`create index on ()`,
+			dbutils.Index{},
+		},
+		// invalid index name
+		{
+			`create index a.b.c on ()`,
+			dbutils.Index{},
+		},
 		// simple (multiple spaces between the table and columns list)
 		{
 			`create index indexname on tablename   (col1)`,

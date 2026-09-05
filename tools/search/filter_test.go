@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -242,11 +243,43 @@ func TestFilterDataBuildExprWithParams(t *testing.T) {
 		t.Fatalf("Expected 1 query, got %d", len(calledQueries))
 	}
 
-	expectedQuery := `SELECT * WHERE ([[test1]] = 1 OR [[test2]] = 0 OR [[test3a]] = 123.456 OR [[test3b]] = 123.456 OR ([[test4]] = '' OR [[test4]] IS NULL) OR [[test5]] = '""' OR [[test6]] = 'simple' OR [[test7]] = '''single_quotes''' OR [[test8]] = '"double_quotes"' OR [[test9]] = '''"quote_with_backslash\' OR [[test10]] = '2023-01-01 00:00:00 +0000 UTC' OR [[test11]] = '["a","''quote","\"quote"]' OR [[test12]] = '{"a":123,"b":"quote\""}' OR [[test13]] = 'a`
+	expectedQuery := `SELECT * WHERE ([[test1]] = 1 OR [[test2]] = 0 OR [[test3a]] = 123.456 OR [[test3b]] = 123.456 OR ([[test4]] = '' OR [[test4]] IS NULL) OR ([[test5]] = '' OR [[test5]] IS NULL) OR [[test6]] = 'simple' OR [[test7]] = '''single_quotes''' OR [[test8]] = '"double_quotes"' OR [[test9]] = '''"quote_with_backslash\' OR [[test10]] = '2023-01-01 00:00:00 +0000 UTC' OR [[test11]] = '["a","''quote","\"quote"]' OR [[test12]] = '{"a":123,"b":"quote\""}' OR [[test13]] = 'a`
 	expectedQuery += "\nb')"
 	if expectedQuery != calledQueries[0] {
 		t.Fatalf("Expected query \n%s, \ngot \n%s", expectedQuery, calledQueries[0])
 	}
+}
+
+type brokenJSON struct{}
+
+func (j brokenJSON) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("test_error")
+}
+
+func TestFilterDataBuildExprWithParamsFallbackError(t *testing.T) {
+	t.Parallel()
+
+	resolver := search.NewSimpleFieldResolver("test")
+
+	filter := search.FilterData(`test = {:test}`)
+
+	t.Run("non-string type but valid json", func(t *testing.T) {
+		_, err := filter.BuildExpr(resolver, dbx.Params{
+			"test": map[string]any{"a": "123"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("non-string type but invalid json", func(t *testing.T) {
+		_, err := filter.BuildExpr(resolver, dbx.Params{
+			"test": brokenJSON{},
+		})
+		if err == nil {
+			t.Fatal("Expected filter build error, got nil")
+		}
+	})
 }
 
 func TestFilterDataBuildExprWithLimit(t *testing.T) {
