@@ -29,7 +29,11 @@ RUN wget -q "https://github.com/benbjohnson/litestream/releases/download/v${LITE
 # Stage 3: Runtime
 FROM alpine:3
 
-RUN apk update && apk add --no-cache ca-certificates tzdata wget && rm -rf /var/cache/apk/*
+# flock (util-linux) backs the single-writer lock in entrypoint.sh. Busybox
+# ships a flock applet too, but the util-linux one is the deterministic source
+# of `-w SECS` on a file descriptor — and the entrypoint refuses to start
+# without it rather than silently allowing a second SQLite writer.
+RUN apk update && apk add --no-cache ca-certificates tzdata wget flock && rm -rf /var/cache/apk/*
 
 COPY --from=builder /pocketbase /usr/local/bin/pocketbase
 COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream

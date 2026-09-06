@@ -271,8 +271,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 port: 8090
               }
               initialDelaySeconds: 5
+              // 45 x 3s = 140s of grace. The entrypoint waits up to 75s for the
+              // outgoing replica to release the single-writer lock (#35) before
+              // PocketBase ever binds a port, so the old 95s left almost no
+              // margin on a slow drain.
               periodSeconds: 3
-              failureThreshold: 30
+              failureThreshold: 45
               timeoutSeconds: 3
             }
             {
