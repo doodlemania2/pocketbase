@@ -51,35 +51,4 @@ jobs:
           docker run -d --name pb-test -p 8090:8090 pocketbase-fork:test
           sleep 5
           curl -sf http://localhost:8090/api/health || (docker logs pb-test && exit 1)
-          docker logs pb-test 2>&1 | grep -q "single-writer lock acquired" \
-            || (echo "entrypoint did not take the single-writer lock"; docker logs pb-test; exit 1)
           docker stop pb-test
-
-      # Regression test for #35: a rolling Container Apps revision transition
-      # runs two replicas against the same /pb_data for ~40s, which corrupted
-      # auxiliary.db four times. The second writer must refuse to start.
-      - name: Single-writer lock keeps a second replica off the volume
-        run: |
-          docker volume create pb-lock-test
-          docker run -d --name pb-lock-a -v pb-lock-test:/pb_data pocketbase-fork:test
-          for _ in $(seq 30); do
-            if docker logs pb-lock-a 2>&1 | grep -q "single-writer lock acquired"; then
-              break
-            fi
-            sleep 1
-          done
-          docker logs pb-lock-a 2>&1 | grep -q "single-writer lock acquired" \
-            || (echo "first replica never took the lock"; docker logs pb-lock-a; exit 1)
-
-          set +e
-          docker run --name pb-lock-b -v pb-lock-test:/pb_data \
-            -e PB_SINGLE_WRITER_TIMEOUT=5 pocketbase-fork:test
-          rc=$?
-          set -e
-          test "$rc" -ne 0 \
-            || (echo "second replica started while the volume was locked"; docker logs pb-lock-b; exit 1)
-          docker logs pb-lock-b 2>&1 | grep -q "still holds /pb_data" \
-            || (echo "second replica failed for the wrong reason"; docker logs pb-lock-b; exit 1)
-
-          docker rm -f pb-lock-a pb-lock-b
-          docker volume rm pb-lock-test

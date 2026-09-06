@@ -11,12 +11,6 @@ DEFAULT_SERVE_ARGS="serve --http=${HOST}:${PORT} --dir=/pb_data --publicDir=/pb_
 LITESTREAM_PID=""
 PB_PID=""
 
-# Single-writer lock file and how long an incoming replica waits for it.
-# Set PB_SINGLE_WRITER_TIMEOUT=0 to disable the lock entirely (see
-# acquire_single_writer_lock for why you almost certainly should not).
-SINGLE_WRITER_LOCK=/pb_data/.pb_singlewriter.lock
-SINGLE_WRITER_TIMEOUT=${PB_SINGLE_WRITER_TIMEOUT:-75}
-
 # Graceful shutdown: drain PocketBase first so in-flight HTTP requests complete
 # and SQLite WAL is checkpointed, THEN signal Litestream so it can replicate the
 # final WAL frames to the blob replica before exiting. Without this, the
@@ -37,70 +31,6 @@ shutdown() {
     exit 0
 }
 trap shutdown TERM INT
-
-# Hold /pb_data against a second SQLite writer for the life of this process.
-#
-# Azure Container Apps performs a ROLLING revision transition: the incoming
-# replica is started and made ready BEFORE the outgoing one is drained. For
-# ~40s two PocketBase processes therefore hold the same NFS /pb_data, which is
-# exactly the case SQLite does not survive. `maxReplicas: 1` does not prevent
-# it — that bounds replicas per revision, not across a rollout. The overlap is
-# directly observable in ContainerAppConsoleLogs_CL, where two RevisionName_s
-# values emit request logs in the same second, and it corrupted auxiliary.db on
-# 2026-06-09, 2026-08-15, 2026-08-31 and 2026-09-05 (issue #35).
-#
-# /pb_data is deliberately NFS rather than SMB because NFS carries the POSIX
-# locks SQLite's WAL needs, so take one: an exclusive flock held on fd 9 for
-# the life of the shell. fd 9 is inherited by pocketbase and litestream, so the
-# lock outlives even a SIGKILL that skips the shutdown trap, and is released by
-# the kernel once the whole process tree is gone.
-#
-# Timing out is the safe outcome, not the bad one: the rollout fails loudly and
-# the previous revision keeps serving, which beats corrupting the volume. The
-# default wait covers the worst case, terminationGracePeriodSeconds (60s), and
-# still leaves the startup probe (95s) room to see a listening port.
-acquire_single_writer_lock() {
-    if [ "$SINGLE_WRITER_TIMEOUT" = "0" ]; then
-        echo "[entrypoint] WARN: PB_SINGLE_WRITER_TIMEOUT=0 — single-writer lock disabled."
-        echo "[entrypoint]       Two replicas sharing /pb_data will corrupt SQLite."
-        return 0
-    fi
-
-    if ! command -v flock >/dev/null 2>&1; then
-        echo "[entrypoint] FATAL: flock not found — cannot guarantee a single SQLite writer."
-        echo "[entrypoint]        Install util-linux flock in the image, or set"
-        echo "[entrypoint]        PB_SINGLE_WRITER_TIMEOUT=0 to start anyway and risk corruption."
-        exit 1
-    fi
-
-    # PocketBase creates --dir itself, but that happens after this runs, and an
-    # image started without a mounted volume has no /pb_data at all.
-    if ! mkdir -p /pb_data 2>/dev/null; then
-        echo "[entrypoint] FATAL: cannot create /pb_data."
-        exit 1
-    fi
-
-    # Create the lock file first so an unwritable volume is a clear message
-    # rather than a bare `exec` redirection failure, which in a non-interactive
-    # shell kills the shell before anything can be printed.
-    if ! touch "$SINGLE_WRITER_LOCK" 2>/dev/null; then
-        echo "[entrypoint] FATAL: cannot create $SINGLE_WRITER_LOCK — is /pb_data writable?"
-        exit 1
-    fi
-
-    # Append rather than truncate: another replica may be holding this very file.
-    exec 9>>"$SINGLE_WRITER_LOCK"
-
-    echo "[entrypoint] acquiring single-writer lock on /pb_data (waiting up to ${SINGLE_WRITER_TIMEOUT}s)..."
-    if flock -x -w "$SINGLE_WRITER_TIMEOUT" 9; then
-        echo "[entrypoint] single-writer lock acquired."
-        return 0
-    fi
-
-    echo "[entrypoint] FATAL: another replica still holds /pb_data after ${SINGLE_WRITER_TIMEOUT}s."
-    echo "[entrypoint]        Refusing to start a second SQLite writer; the previous revision keeps serving."
-    exit 1
-}
 
 litestream_restore() {
     if [ -n "$LITESTREAM_REPLICA_URL" ] && [ ! -f /pb_data/data.db ]; then
@@ -142,9 +72,6 @@ create_superuser() {
 }
 
 run_serve() {
-    # Before anything opens data.db or auxiliary.db — including the Litestream
-    # restore and the superuser bootstrap below.
-    acquire_single_writer_lock
     litestream_restore
     litestream_replicate
     # Brief pause so Litestream can read the restored db, match it against the

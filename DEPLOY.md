@@ -233,15 +233,16 @@ The `ReapplyCondition` on the aux-init migration recreates `_logs` on next boot.
 Verify by confirming a fresh small `auxiliary.db` plus a **growing** WAL, and that
 new entries appear in the dashboard *Logs* view.
 
-**Why it happened — deploys, not midnight crons.** It recurred four times:
+**Why it happens — deploys, not midnight crons.** It has recurred five times:
 `/pb_data/.recover-2026-06-09`, `.recover-2026-08-15`, `.recover-2026-08-31`,
-`.recover-2026-09-06`. An earlier revision of this document blamed contention
-between `__pbDBOptimize__`, `__pbLogsCleanup__` and the backup cron at midnight.
-**That was wrong**, and the mitigation it proposed — moving the backup cron to
-`0 2 * * *` — was applied and corruption recurred anyway.
+`.recover-2026-09-06` and `.recover-2026-09-06-2210`. An earlier revision of this
+document blamed contention between `__pbDBOptimize__`, `__pbLogsCleanup__` and
+the backup cron at midnight. **That was wrong**, and the mitigation it proposed —
+moving the backup cron to `0 2 * * *` — was applied and corruption recurred
+anyway.
 
-The real cause is the *rollout*. Container Apps performs a rolling revision
-transition: the incoming replica is started and made ready **before** the
+The cause is the *rollout*. Container Apps performs a rolling revision
+transition: the incoming replica is started and made **ready** before the
 outgoing one is drained, so two PocketBase processes hold the same NFS
 `/pb_data` for around 40 seconds. `maxReplicas: 1` does not prevent it, because
 that bounds replicas per revision, not across a transition. Console logs carry
@@ -256,25 +257,39 @@ ContainerAppConsoleLogs_CL
 ```
 
 Every observed onset sits inside such a window — 2026-08-31 16:23 (41 s),
-2026-08-31 17:33 (41 s), 2026-09-05 19:24 (43 s) — and the app ran 2026-09-01 to
-09-04 with **zero** console output, five clean days with no deploy in them.
+2026-08-31 17:33 (41 s), 2026-09-05 19:24 (43 s), 2026-09-06 22:10 — and the app
+ran 2026-09-01 to 09-04 with **zero** console output, five clean days with no
+deploy in them.
 
-**The fix (#35).** [entrypoint.sh](entrypoint.sh) now takes an exclusive `flock`
-on `/pb_data/.pb_singlewriter.lock` and holds it on fd 9 for the life of the
-process, so an incoming replica waits for the outgoing one to close both
-databases instead of writing alongside it. `/pb_data` is NFS rather than SMB
-precisely because it carries the POSIX locks this needs. `PB_SINGLE_WRITER_TIMEOUT`
-(default 75 s) bounds the wait; on timeout the container exits non-zero and the
-rollout fails loudly with the previous revision still serving, which is the
-right trade against corrupting the volume. The startup probe allows 140 s
-(`failureThreshold: 45`) to leave room for that wait. Set
-`PB_SINGLE_WRITER_TIMEOUT=0` to disable the lock — only ever for a single-node
-local run.
+**A startup lock does not fix it — that was tried in prod and deadlocks.**
+The obvious remedy is to have the incoming replica take an exclusive `flock` on
+`/pb_data` and wait for the outgoing one to release it. It was implemented,
+deployed on 2026-09-06, and **must not be reintroduced in that form.** The
+handover is readiness-gated in both directions: Container Apps will not drain
+the outgoing replica until the incoming one reports ready, and the incoming one
+cannot report ready while it is blocked on a lock the outgoing one holds. On the
+first `az containerapp revision restart` after it shipped, the new replica
+logged
 
-Note the ordering: the deploy that *introduces* the lock is still unprotected,
-because the outgoing replica predates it and holds nothing. Expect one last
-corruption on that rollout and recover afterwards; every deploy after it is
-covered.
+```
+[entrypoint] acquiring single-writer lock on /pb_data (waiting up to 75s)...
+[entrypoint] FATAL: another replica still holds /pb_data after 75s.
+```
+
+and exited, the old replica kept serving and kept the lock, and the restart
+could never complete. Confirmed against the event stream: `RevisionDeactivating`
+for the outgoing revision fires *after* the incoming revision's `Server started`
+(19:24:27 versus 19:24:15 on the 2026-09-05 transition). Prod stayed up
+throughout, because failing closed leaves the old replica serving — but no
+deploy would ever have completed again.
+
+**Still open.** Any real fix has to invert that dependency rather than block on
+it: the outgoing replica has to give up the databases when a new one appears,
+or the two must stop sharing the file that keeps breaking. Tracked in
+[#35](https://github.com/doodlemania2/pocketbase/issues/35). Until then the
+overlap is unavoidable, so **expect to run the recovery above after a deploy**,
+and note that the sink-failure alert now tells you within five minutes instead
+of silently (see [The sink-failure signal](#the-sink-failure-signal)).
 
 ## Failure modes & fixes
 
@@ -283,8 +298,7 @@ covered.
 | Pass 3 fails with `Domain ownership verification failed` | DNS records not propagated yet | Re-check `dig`, wait, re-run `azd up` |
 | Pass 1 fails with 403 on `listKeys` of LAW | Principal lacks reader/sharedKeys on `<law-name>` | Grant `Log Analytics Contributor` (or just `*/sharedKeys/action`) in `<shared-obs-rg>` |
 | App returns 502 briefly after deploy | New revision still starting | Expected; startup probe allows up to 90 s |
-| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — historically a deploy running two replicas over one NFS volume | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb); the single-writer lock in `entrypoint.sh` prevents new occurrences |
-| Rollout fails, `another replica still holds /pb_data after 75s` | Outgoing replica did not release the single-writer lock in time | Expected safety behaviour, not corruption — the old revision keeps serving. Check whether the previous replica is wedged, then redeploy. Raise `PB_SINGLE_WRITER_TIMEOUT` only alongside the startup probe's `failureThreshold` |
+| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — a deploy ran two replicas over one NFS volume for ~40 s | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb). Expect this after a deploy until #35 lands |
 | Container crashloops with `SQLITE_BUSY (5)` | `/pb_data` mounted over SMB instead of NFS | SMB lacks POSIX byte-range locks. Storage must be Premium FileStorage + NFS, env VNet-integrated (`6a4f04df`) |
 | `customDomains` value rejected | Cert resource was deleted out-of-band | Set `CUSTOM_DOMAIN=` (empty) and re-deploy, then redo passes 2–3 |
 | Two replicas running (data corruption risk) | Someone bumped `maxReplicas` | Revert — SQLite is single-writer; `maxReplicas: 1` is enforced in [infra/modules/container-app.bicep](infra/modules/container-app.bicep) |
