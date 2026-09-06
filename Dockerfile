@@ -29,7 +29,11 @@ RUN wget -q "https://github.com/benbjohnson/litestream/releases/download/v${LITE
 # Stage 3: Runtime
 FROM alpine:3
 
-RUN apk update && apk add --no-cache ca-certificates tzdata wget && rm -rf /var/cache/apk/*
+# flock (util-linux) confirms the outgoing replica has closed both databases
+# before this one opens them — see acquire_single_writer in entrypoint.sh.
+# Busybox ships a flock applet too; the util-linux package is the deterministic
+# source of `-w SECS` on a file descriptor.
+RUN apk update && apk add --no-cache ca-certificates tzdata wget flock && rm -rf /var/cache/apk/*
 
 COPY --from=builder /pocketbase /usr/local/bin/pocketbase
 COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream

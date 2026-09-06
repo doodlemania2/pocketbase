@@ -271,8 +271,11 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 port: 8090
               }
               initialDelaySeconds: 5
+              // 45 x 3s = 140s of grace. The entrypoint can spend up to
+              // PB_HANDOVER_TIMEOUT (60s) waiting for the outgoing replica to
+              // release /pb_data (#35) before PocketBase ever binds a port.
               periodSeconds: 3
-              failureThreshold: 30
+              failureThreshold: 45
               timeoutSeconds: 3
             }
             {
