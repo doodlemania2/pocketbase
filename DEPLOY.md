@@ -297,6 +297,33 @@ endpoint is configured. Do not remove it. The collector is reached through a
 Cloudflare Tunnel carrying HTTP only — an SDK that defaults to gRPC on 4317
 exports nothing **and reports no error**; the app simply never appears in SigNoz.
 
+### The sink-failure signal
+
+The local `_logs` sink reports its own failures on the OTLP sink. This is the
+part that was missing while `auxiliary.db` was dead from 2026-06-12 to
+2026-08-15: PocketBase's batch writer reports a rejected row with a stdlib
+`log.Println` to stderr, which never crosses `app.Logger()` and so never reached
+a collector, and `PB_OTEL_MIN_LEVEL=WARN` filtered the INFO request logs whose
+disappearance was the only other clue. SigNoz could not tell a dead sink from an
+idle app.
+
+Two messages now carry that state, both emitted straight to the OTLP handler —
+never through `app.Logger()`, which is the sink that just failed:
+
+| Message | Level | Meaning |
+|---|---|---|
+| `local log sink write failed` | ERROR | rows are being rejected; attributes carry `sink`, `failedRecords`, `attemptedRecords`, `failedBatches` and the SQLite `error` |
+| `local log sink recovered` | WARN | the first clean batch after a failing run — the all-clear for the alert |
+
+Both **bypass `PB_OTEL_MIN_LEVEL`** on purpose; trimming request-log volume must
+not also silence the reason the second sink exists. The failure record is rate
+limited to one per 5 minutes and accumulates its counts in between, so a fully
+corrupt database costs 288 records a day instead of 8,600 while still reporting
+the true number of dropped rows.
+
+**Alert on `local log sink write failed`** in SigNoz, and clear on
+`local log sink recovered`.
+
 ### Ingestion cost
 
 Every request is logged at INFO, and the startup/liveness probes hit
