@@ -233,17 +233,63 @@ The `ReapplyCondition` on the aux-init migration recreates `_logs` on next boot.
 Verify by confirming a fresh small `auxiliary.db` plus a **growing** WAL, and that
 new entries appear in the dashboard *Logs* view.
 
-**This recurs.** It has happened at least twice — `/pb_data/.recover-2026-06-09`
-is the first occurrence, and the replacement corrupted again three days later on
-**2026-06-12 at 00:00**, staying dead until 2026-08-15. The suspected cause is
-contention at midnight, where three jobs hit `auxiliary.db` at once:
-`__pbDBOptimize__` (`0 0 * * *`) runs `PRAGMA wal_checkpoint(TRUNCATE)` on the aux
-DB, `__pbLogsCleanup__` (`0 */6 * * *`) bulk-deletes from `_logs`, and the backup
-cron opens `AuxRunInTransaction` plus a second truncating checkpoint while
-archiving the same files — all over NFS. This is correlational, not proven.
-**Cheapest mitigation: move the backup cron off midnight** (e.g. `0 2 * * *` in
-*Settings → Backups*). It costs nothing and, if corruption stops recurring,
-confirms the diagnosis.
+**Why it happens — deploys, not midnight crons.** It has recurred five times:
+`/pb_data/.recover-2026-06-09`, `.recover-2026-08-15`, `.recover-2026-08-31`,
+`.recover-2026-09-06` and `.recover-2026-09-06-2210`. An earlier revision of this
+document blamed contention between `__pbDBOptimize__`, `__pbLogsCleanup__` and
+the backup cron at midnight. **That was wrong**, and the mitigation it proposed —
+moving the backup cron to `0 2 * * *` — was applied and corruption recurred
+anyway.
+
+The cause is the *rollout*. Container Apps performs a rolling revision
+transition: the incoming replica is started and made **ready** before the
+outgoing one is drained, so two PocketBase processes hold the same NFS
+`/pb_data` for around 40 seconds. `maxReplicas: 1` does not prevent it, because
+that bounds replicas per revision, not across a transition. Console logs carry
+`RevisionName_s`, which makes the overlap directly observable — two revisions
+emitting request logs in the same second:
+
+```kql
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == 'ca-auth'
+| where TimeGenerated between (datetime(2026-09-05T19:20:00Z) .. datetime(2026-09-05T19:35:00Z))
+| summarize started=min(TimeGenerated), ended=max(TimeGenerated) by RevisionName_s
+```
+
+Every observed onset sits inside such a window — 2026-08-31 16:23 (41 s),
+2026-08-31 17:33 (41 s), 2026-09-05 19:24 (43 s), 2026-09-06 22:10 — and the app
+ran 2026-09-01 to 09-04 with **zero** console output, five clean days with no
+deploy in them.
+
+**A startup lock does not fix it — that was tried in prod and deadlocks.**
+The obvious remedy is to have the incoming replica take an exclusive `flock` on
+`/pb_data` and wait for the outgoing one to release it. It was implemented,
+deployed on 2026-09-06, and **must not be reintroduced in that form.** The
+handover is readiness-gated in both directions: Container Apps will not drain
+the outgoing replica until the incoming one reports ready, and the incoming one
+cannot report ready while it is blocked on a lock the outgoing one holds. On the
+first `az containerapp revision restart` after it shipped, the new replica
+logged
+
+```
+[entrypoint] acquiring single-writer lock on /pb_data (waiting up to 75s)...
+[entrypoint] FATAL: another replica still holds /pb_data after 75s.
+```
+
+and exited, the old replica kept serving and kept the lock, and the restart
+could never complete. Confirmed against the event stream: `RevisionDeactivating`
+for the outgoing revision fires *after* the incoming revision's `Server started`
+(19:24:27 versus 19:24:15 on the 2026-09-05 transition). Prod stayed up
+throughout, because failing closed leaves the old replica serving — but no
+deploy would ever have completed again.
+
+**Still open.** Any real fix has to invert that dependency rather than block on
+it: the outgoing replica has to give up the databases when a new one appears,
+or the two must stop sharing the file that keeps breaking. Tracked in
+[#35](https://github.com/doodlemania2/pocketbase/issues/35). Until then the
+overlap is unavoidable, so **expect to run the recovery above after a deploy**,
+and note that the sink-failure alert now tells you within five minutes instead
+of silently (see [The sink-failure signal](#the-sink-failure-signal)).
 
 ## Failure modes & fixes
 
@@ -252,7 +298,7 @@ confirms the diagnosis.
 | Pass 3 fails with `Domain ownership verification failed` | DNS records not propagated yet | Re-check `dig`, wait, re-run `azd up` |
 | Pass 1 fails with 403 on `listKeys` of LAW | Principal lacks reader/sharedKeys on `<law-name>` | Grant `Log Analytics Contributor` (or just `*/sharedKeys/action`) in `<shared-obs-rg>` |
 | App returns 502 briefly after deploy | New revision still starting | Expected; startup probe allows up to 90 s |
-| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb) |
+| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — a deploy ran two replicas over one NFS volume for ~40 s | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb). Expect this after a deploy until #35 lands |
 | Container crashloops with `SQLITE_BUSY (5)` | `/pb_data` mounted over SMB instead of NFS | SMB lacks POSIX byte-range locks. Storage must be Premium FileStorage + NFS, env VNet-integrated (`6a4f04df`) |
 | `customDomains` value rejected | Cert resource was deleted out-of-band | Set `CUSTOM_DOMAIN=` (empty) and re-deploy, then redo passes 2–3 |
 | Two replicas running (data corruption risk) | Someone bumped `maxReplicas` | Revert — SQLite is single-writer; `maxReplicas: 1` is enforced in [infra/modules/container-app.bicep](infra/modules/container-app.bicep) |
@@ -296,6 +342,33 @@ kubectl -n signoz get secret otlp-ingest-token -o jsonpath='{.data.token}' | bas
 endpoint is configured. Do not remove it. The collector is reached through a
 Cloudflare Tunnel carrying HTTP only — an SDK that defaults to gRPC on 4317
 exports nothing **and reports no error**; the app simply never appears in SigNoz.
+
+### The sink-failure signal
+
+The local `_logs` sink reports its own failures on the OTLP sink. This is the
+part that was missing while `auxiliary.db` was dead from 2026-06-12 to
+2026-08-15: PocketBase's batch writer reports a rejected row with a stdlib
+`log.Println` to stderr, which never crosses `app.Logger()` and so never reached
+a collector, and `PB_OTEL_MIN_LEVEL=WARN` filtered the INFO request logs whose
+disappearance was the only other clue. SigNoz could not tell a dead sink from an
+idle app.
+
+Two messages now carry that state, both emitted straight to the OTLP handler —
+never through `app.Logger()`, which is the sink that just failed:
+
+| Message | Level | Meaning |
+|---|---|---|
+| `local log sink write failed` | ERROR | rows are being rejected; attributes carry `sink`, `failedRecords`, `attemptedRecords`, `failedBatches` and the SQLite `error` |
+| `local log sink recovered` | WARN | the first clean batch after a failing run — the all-clear for the alert |
+
+Both **bypass `PB_OTEL_MIN_LEVEL`** on purpose; trimming request-log volume must
+not also silence the reason the second sink exists. The failure record is rate
+limited to one per 5 minutes and accumulates its counts in between, so a fully
+corrupt database costs 288 records a day instead of 8,600 while still reporting
+the true number of dropped rows.
+
+**Alert on `local log sink write failed`** in SigNoz, and clear on
+`local log sink recovered`.
 
 ### Ingestion cost
 

@@ -1486,6 +1486,12 @@ func (app *BaseApp) initLogger() error {
 	ticker := time.NewTicker(duration)
 	done := make(chan bool, 1)
 
+	// fork-local: assigned below, before the flush goroutine starts, and
+	// captured by WriteFunc so that a local sink rejecting writes is reported
+	// on the independent OTLP sink instead of only to stderr.
+	// Nil (a no-op) whenever no collector is configured — see core/logger_otel.go
+	var sinkReporter *otelSinkReporter
+
 	handler := logger.NewBatchHandler(logger.BatchOptions{
 		Level:     getLoggerMinLevel(app),
 		BatchSize: 200,
@@ -1508,6 +1514,11 @@ func (app *BaseApp) initLogger() error {
 				return nil
 			}
 
+			// fork-local: the per-row failure below is swallowed by design, so
+			// tally it and hand the aggregate to the OTLP sink afterwards.
+			var failedRecords int
+			var lastErr error
+
 			// write the accumulated logs
 			// (note: based on several local tests there is no significant performance difference between small number of separate write queries vs 1 big INSERT)
 			app.AuxRunInTransaction(func(txApp App) error {
@@ -1522,15 +1533,28 @@ func (app *BaseApp) initLogger() error {
 
 					if err := txApp.AuxSave(model); err != nil {
 						log.Println("Failed to write log", model, err)
+						failedRecords++
+						lastErr = err
 					}
 				}
 
 				return nil
 			})
 
+			// fork-local: see core/logger_otel.go
+			sinkReporter.report(failedRecords, len(logs), lastErr)
+
 			return nil
 		},
 	})
+
+	// fork-local: tee to an OTLP collector when one is configured
+	// (no-op otherwise) — see core/logger_otel.go.
+	// Must run before the goroutine below, which is the other reader of
+	// sinkReporter.
+	otelHandler, reporter := app.initOTelLogger(handler)
+	sinkReporter = reporter
+	app.logger = slog.New(otelHandler)
 
 	routine.FireAndForget(func() {
 		ctx := context.Background()
@@ -1544,10 +1568,6 @@ func (app *BaseApp) initLogger() error {
 			}
 		}
 	})
-
-	// fork-local: tee to an OTLP collector when one is configured
-	// (no-op otherwise) — see core/logger_otel.go
-	app.logger = slog.New(app.initOTelLogger(handler))
 
 	// write all remaining logs before ticker.Stop to avoid races with ResetBootstrap user calls
 	app.OnTerminate().Bind(&hook.Handler[*TerminateEvent]{

@@ -103,9 +103,16 @@ func TestInitOTelLoggerWithoutDestinationIsPassthrough(t *testing.T) {
 	app := NewBaseApp(BaseAppConfig{DataDir: t.TempDir()})
 	local := &recordingHandler{enabled: true}
 
-	if got := app.initOTelLogger(local); got != slog.Handler(local) {
+	got, reporter := app.initOTelLogger(local)
+	if got != slog.Handler(local) {
 		t.Fatalf("expected the original handler back, got %T", got)
 	}
+	if reporter != nil {
+		t.Fatal("expected a nil sink reporter when no collector is configured")
+	}
+
+	// the nil reporter must stay callable — initLogger calls it on every batch
+	reporter.report(3, 10, errSinkFailed)
 }
 
 func TestFanoutHandlerWritesToBothSinks(t *testing.T) {
@@ -181,5 +188,184 @@ func TestFanoutHandlerEnabledIsUnionOfSinks(t *testing.T) {
 	h.minLevel = slog.LevelError
 	if h.Enabled(context.Background(), slog.LevelInfo) {
 		t.Fatal("expected disabled when the remote sink is gated out by minLevel")
+	}
+}
+
+// newTestSinkReporter builds a reporter over a recording handler with a clock
+// the test drives by hand.
+func newTestSinkReporter(remote slog.Handler, clock *time.Time) *otelSinkReporter {
+	return &otelSinkReporter{
+		remote: remote,
+		now:    func() time.Time { return *clock },
+	}
+}
+
+func attrsOf(r slog.Record) map[string]any {
+	out := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		out[a.Key] = a.Value.Any()
+		return true
+	})
+	return out
+}
+
+// The whole point of the reporter: a rejected local write has to reach the
+// collector. Before this existed the only trace was a stderr log.Println.
+func TestSinkReporterExportsFailure(t *testing.T) {
+	remote := &recordingHandler{enabled: true}
+	clock := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	r := newTestSinkReporter(remote, &clock)
+
+	r.report(2, 5, errSinkFailed)
+
+	if remote.count() != 1 {
+		t.Fatalf("expected 1 exported record, got %d", remote.count())
+	}
+
+	rec := remote.records[0]
+	if rec.Message != OTelSinkFailureMessage {
+		t.Fatalf("expected message %q, got %q", OTelSinkFailureMessage, rec.Message)
+	}
+	if rec.Level != slog.LevelError {
+		t.Fatalf("expected ERROR, got %v", rec.Level)
+	}
+
+	attrs := attrsOf(rec)
+	if attrs["failedRecords"] != int64(2) || attrs["attemptedRecords"] != int64(5) {
+		t.Fatalf("unexpected counts: %v", attrs)
+	}
+	if attrs["error"] != errSinkFailed.Error() {
+		t.Fatalf("expected the cause on the record, got %v", attrs["error"])
+	}
+}
+
+// A clean batch must not export anything, or a healthy app would pay for a
+// record every 3 seconds.
+func TestSinkReporterSilentWhenHealthy(t *testing.T) {
+	remote := &recordingHandler{enabled: true}
+	clock := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	r := newTestSinkReporter(remote, &clock)
+
+	for i := 0; i < 5; i++ {
+		r.report(0, 10, nil)
+	}
+
+	if remote.count() != 0 {
+		t.Fatalf("expected no exported records, got %d", remote.count())
+	}
+}
+
+// A fully corrupt auxiliary.db fails every record — ~8.6k a day from the health
+// probe alone. The rate limit is what keeps that from becoming the ingestion
+// bill, and the accumulated counts are what keep it honest.
+func TestSinkReporterRateLimitsAndAccumulates(t *testing.T) {
+	remote := &recordingHandler{enabled: true}
+	clock := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	r := newTestSinkReporter(remote, &clock)
+
+	// first failing batch exports immediately
+	r.report(1, 1, errSinkFailed)
+
+	// everything inside the interval is folded into the next record
+	for i := 0; i < 100; i++ {
+		clock = clock.Add(time.Second)
+		r.report(2, 4, errSinkFailed)
+	}
+
+	if remote.count() != 1 {
+		t.Fatalf("expected the interval to suppress the follow-ups, got %d records", remote.count())
+	}
+
+	clock = clock.Add(otelSinkReportInterval)
+	r.report(3, 6, errSinkFailed)
+
+	if remote.count() != 2 {
+		t.Fatalf("expected a second record once the interval elapsed, got %d", remote.count())
+	}
+
+	attrs := attrsOf(remote.records[1])
+	if got := attrs["failedRecords"]; got != int64(203) {
+		t.Fatalf("expected the suppressed failures to be carried (203), got %v", got)
+	}
+	if got := attrs["attemptedRecords"]; got != int64(406) {
+		t.Fatalf("expected attemptedRecords 406, got %v", got)
+	}
+	if got := attrs["failedBatches"]; got != int64(101) {
+		t.Fatalf("expected failedBatches 101, got %v", got)
+	}
+}
+
+// An alert on the failure message needs an all-clear, and it must fire once —
+// not on every healthy batch that follows.
+func TestSinkReporterExportsRecoveryOnce(t *testing.T) {
+	remote := &recordingHandler{enabled: true}
+	clock := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	r := newTestSinkReporter(remote, &clock)
+
+	r.report(4, 8, errSinkFailed)
+	r.report(0, 8, nil)
+	r.report(0, 8, nil)
+	r.report(0, 8, nil)
+
+	if remote.count() != 2 {
+		t.Fatalf("expected exactly one failure and one recovery record, got %d", remote.count())
+	}
+
+	rec := remote.records[1]
+	if rec.Message != OTelSinkRecoveryMessage {
+		t.Fatalf("expected message %q, got %q", OTelSinkRecoveryMessage, rec.Message)
+	}
+	if rec.Level != slog.LevelWarn {
+		t.Fatalf("expected WARN, got %v", rec.Level)
+	}
+
+	// a fresh failure after recovery reports immediately rather than waiting
+	// out the interval left over from the previous run
+	r.report(1, 8, errSinkFailed)
+	if remote.count() != 3 {
+		t.Fatalf("expected a new failure record after recovery, got %d", remote.count())
+	}
+}
+
+// PB_OTEL_MIN_LEVEL exists to trim request-log volume. It must not trim the one
+// record that says the local sink is dead.
+func TestSinkReporterIgnoresMinLevelGate(t *testing.T) {
+	t.Setenv("PB_OTEL_MIN_LEVEL", "ERROR")
+
+	remote := &recordingHandler{enabled: true}
+	clock := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	r := newTestSinkReporter(remote, &clock)
+
+	// the recovery record is WARN, below the configured ERROR gate
+	r.report(1, 1, errSinkFailed)
+	r.report(0, 1, nil)
+
+	if remote.count() != 2 {
+		t.Fatalf("expected both records to bypass the min-level gate, got %d", remote.count())
+	}
+	if remote.records[1].Level != slog.LevelWarn {
+		t.Fatalf("expected the WARN recovery record to survive, got %v", remote.records[1].Level)
+	}
+}
+
+// The reporter is called from the batch-flush goroutine while the app is
+// running; it must not be the thing that introduces a race.
+func TestSinkReporterConcurrentReports(t *testing.T) {
+	remote := &recordingHandler{enabled: true}
+	clock := time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC)
+	r := newTestSinkReporter(remote, &clock)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.report(1, 2, errSinkFailed)
+		}()
+	}
+	wg.Wait()
+
+	if remote.count() != 1 {
+		t.Fatalf("expected the rate limit to hold under concurrency, got %d records", remote.count())
 	}
 }
