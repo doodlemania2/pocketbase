@@ -261,35 +261,63 @@ Every observed onset sits inside such a window — 2026-08-31 16:23 (41 s),
 ran 2026-09-01 to 09-04 with **zero** console output, five clean days with no
 deploy in them.
 
-**A startup lock does not fix it — that was tried in prod and deadlocks.**
-The obvious remedy is to have the incoming replica take an exclusive `flock` on
-`/pb_data` and wait for the outgoing one to release it. It was implemented,
-deployed on 2026-09-06, and **must not be reintroduced in that form.** The
-handover is readiness-gated in both directions: Container Apps will not drain
+**A startup lock does not fix it, and must not be reintroduced.** The obvious
+remedy is to have the incoming replica take an exclusive `flock` on `/pb_data`
+and wait. It was implemented and deployed on 2026-09-06, and **deadlocks**: the
+handover is readiness-gated in both directions. Container Apps will not drain
 the outgoing replica until the incoming one reports ready, and the incoming one
-cannot report ready while it is blocked on a lock the outgoing one holds. On the
-first `az containerapp revision restart` after it shipped, the new replica
-logged
+cannot report ready while blocked on a lock the outgoing one holds. On the first
+`az containerapp revision restart` after it shipped the new replica logged
 
 ```
 [entrypoint] acquiring single-writer lock on /pb_data (waiting up to 75s)...
 [entrypoint] FATAL: another replica still holds /pb_data after 75s.
 ```
 
-and exited, the old replica kept serving and kept the lock, and the restart
-could never complete. Confirmed against the event stream: `RevisionDeactivating`
-for the outgoing revision fires *after* the incoming revision's `Server started`
-(19:24:27 versus 19:24:15 on the 2026-09-05 transition). Prod stayed up
-throughout, because failing closed leaves the old replica serving — but no
-deploy would ever have completed again.
+and exited, while the old one kept serving and kept the lock. Prod stayed up —
+failing closed leaves the old replica serving — but no deploy would ever have
+completed again. Reverted in `2f46f48b`. Confirmed independently against the
+event stream: the outgoing revision's `RevisionDeactivating` fires *after* the
+incoming revision's `Server started` (19:24:27 vs 19:24:15 on the 2026-09-05
+transition).
 
-**Still open.** Any real fix has to invert that dependency rather than block on
-it: the outgoing replica has to give up the databases when a new one appears,
-or the two must stop sharing the file that keeps breaking. Tracked in
-[#35](https://github.com/doodlemania2/pocketbase/issues/35). Until then the
-overlap is unavoidable, so **expect to run the recovery above after a deploy**,
-and note that the sink-failure alert now tells you within five minutes instead
-of silently (see [The sink-failure signal](#the-sink-failure-signal)).
+### The fix: the outgoing replica leaves when asked
+
+The dependency has to be inverted, so [entrypoint.sh](entrypoint.sh) does that.
+The incoming replica *asks*; the outgoing one leaves of its own accord instead
+of waiting to be drained:
+
+1. The incoming replica writes its id to `/pb_data/.pb_handover`.
+2. A watcher in the outgoing replica reads an id that is not its own and takes
+   its normal graceful shutdown path — closing both databases and releasing
+   `/pb_data/.pb_singlewriter.lock` without ACA having to drain it.
+3. The incoming replica's `flock` returns, it clears the handover file, starts
+   its own watcher, and serves.
+
+What this looks like in the console on a healthy rollout:
+
+```
+[entrypoint] waiting for the previous replica to release /pb_data (up to 60s)...
+[entrypoint] handover requested by 'ca-auth--xxxx-yyyy-7' — releasing /pb_data.   <- outgoing
+[entrypoint] /pb_data is ours — single writer confirmed.                          <- incoming
+```
+
+**It fails open on purpose.** If the wait expires the incoming replica starts
+anyway, with a `WARN: no handover after Ns` line. That is what keeps the
+deadlock above from ever recurring: the deploy that first ships this mechanism
+faces an outgoing replica that has no watcher and can never answer, and every
+later rollout would inherit the same trap if a timeout were fatal. A brief
+overlap is recoverable; a container app that can no longer be deployed is not.
+**A repeat of that WARN outside the introducing deploy means two writers are
+sharing the volume** — treat it as the corruption alarm it is.
+
+`PB_HANDOVER_TIMEOUT` (default 60 s) bounds the wait; the normal wait is a poll
+interval plus a graceful drain, a few seconds. `PB_HANDOVER_TIMEOUT=0` disables
+the mechanism entirely and should only ever be used for a single-node local run.
+The startup probe allows 140 s, so even the full timeout leaves room to bind a
+port. CI covers it: [.github/workflows/test.yml](.github/workflows/test.yml)
+starts two containers on one Docker volume and asserts the first exits and the
+second takes over.
 
 ## Failure modes & fixes
 
@@ -297,8 +325,9 @@ of silently (see [The sink-failure signal](#the-sink-failure-signal)).
 |---|---|---|
 | Pass 3 fails with `Domain ownership verification failed` | DNS records not propagated yet | Re-check `dig`, wait, re-run `azd up` |
 | Pass 1 fails with 403 on `listKeys` of LAW | Principal lacks reader/sharedKeys on `<law-name>` | Grant `Log Analytics Contributor` (or just `*/sharedKeys/action`) in `<shared-obs-rg>` |
-| App returns 502 briefly after deploy | New revision still starting | Expected; startup probe allows up to 90 s |
-| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — a deploy ran two replicas over one NFS volume for ~40 s | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb). Expect this after a deploy until #35 lands |
+| App returns 502 briefly after deploy | New revision still starting, possibly waiting on the handover | Expected; startup probe allows up to 140 s |
+| `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — a deploy ran two replicas over one NFS volume | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb). The handover in `entrypoint.sh` prevents new occurrences |
+| `WARN: no handover after 60s` on a rollout | The outgoing replica never answered, so this one started without the lock | Expected exactly once, on the deploy that introduced the mechanism. Any repeat means two writers shared `/pb_data` — check `auxiliary.db` and read [#35](https://github.com/doodlemania2/pocketbase/issues/35) |
 | Container crashloops with `SQLITE_BUSY (5)` | `/pb_data` mounted over SMB instead of NFS | SMB lacks POSIX byte-range locks. Storage must be Premium FileStorage + NFS, env VNet-integrated (`6a4f04df`) |
 | `customDomains` value rejected | Cert resource was deleted out-of-band | Set `CUSTOM_DOMAIN=` (empty) and re-deploy, then redo passes 2–3 |
 | Two replicas running (data corruption risk) | Someone bumped `maxReplicas` | Revert — SQLite is single-writer; `maxReplicas: 1` is enforced in [infra/modules/container-app.bicep](infra/modules/container-app.bicep) |

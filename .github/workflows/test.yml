@@ -51,4 +51,41 @@ jobs:
           docker run -d --name pb-test -p 8090:8090 pocketbase-fork:test
           sleep 5
           curl -sf http://localhost:8090/api/health || (docker logs pb-test && exit 1)
+          docker logs pb-test 2>&1 | grep -q "single writer confirmed" \
+            || (echo "entrypoint did not confirm single-writer ownership"; docker logs pb-test; exit 1)
           docker stop pb-test
+
+      # Regression test for #35. A rolling Container Apps revision transition
+      # runs two replicas against one /pb_data for ~40s, which corrupted
+      # auxiliary.db five times. The incoming replica cannot simply block —
+      # readiness gates the handover in both directions, and blocking deadlocks
+      # the rollout (b7642f75, reverted). So the OUTGOING replica must leave on
+      # its own when asked. That is what this asserts.
+      - name: Rollout handover leaves a single writer on the volume
+        run: |
+          docker volume create pb-handover-test
+          docker run -d --name pb-old -v pb-handover-test:/pb_data pocketbase-fork:test
+          for _ in $(seq 30); do
+            if docker logs pb-old 2>&1 | grep -q "single writer confirmed"; then break; fi
+            sleep 1
+          done
+          docker logs pb-old 2>&1 | grep -q "single writer confirmed" \
+            || (echo "first replica never took the volume"; docker logs pb-old; exit 1)
+
+          docker run -d --name pb-new -v pb-handover-test:/pb_data pocketbase-fork:test
+          for _ in $(seq 60); do
+            if docker logs pb-new 2>&1 | grep -q "single writer confirmed"; then break; fi
+            sleep 1
+          done
+
+          docker logs pb-new 2>&1 | grep -q "single writer confirmed" \
+            || (echo "incoming replica never took over"; docker logs pb-new; docker logs pb-old; exit 1)
+          docker logs pb-old 2>&1 | grep -q "handover requested" \
+            || (echo "outgoing replica ignored the handover request"; docker logs pb-old; exit 1)
+          test "$(docker inspect -f '{{.State.Running}}' pb-old)" = "false" \
+            || (echo "outgoing replica is still running alongside the new one"; docker logs pb-old; exit 1)
+          test "$(docker inspect -f '{{.State.Running}}' pb-new)" = "true" \
+            || (echo "incoming replica is not running"; docker logs pb-new; exit 1)
+
+          docker rm -f pb-old pb-new
+          docker volume rm pb-handover-test
