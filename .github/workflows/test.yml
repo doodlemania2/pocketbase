@@ -82,10 +82,27 @@ jobs:
             || (echo "incoming replica never took over"; docker logs pb-new; docker logs pb-old; exit 1)
           docker logs pb-old 2>&1 | grep -q "handover requested" \
             || (echo "outgoing replica ignored the handover request"; docker logs pb-old; exit 1)
-          test "$(docker inspect -f '{{.State.Running}}' pb-old)" = "false" \
-            || (echo "outgoing replica is still running alongside the new one"; docker logs pb-old; exit 1)
+          docker logs pb-old 2>&1 | grep -q "Parking until this replica is drained" \
+            || (echo "outgoing replica did not park"; docker logs pb-old; exit 1)
+
+          # It must PARK, not exit. An exit reads as a crash to Container Apps,
+          # which restarts the container; that restart then races the incoming
+          # replica for the lock and can win it.
+          test "$(docker inspect -f '{{.State.Running}}' pb-old)" = "true" \
+            || (echo "outgoing replica exited instead of parking"; docker logs pb-old; exit 1)
           test "$(docker inspect -f '{{.State.Running}}' pb-new)" = "true" \
             || (echo "incoming replica is not running"; docker logs pb-new; exit 1)
+
+          # Parked means it really let go: no pocketbase process left in it.
+          if docker exec pb-old pgrep -f '/usr/local/bin/pocketbase' >/dev/null 2>&1; then
+            echo "outgoing replica parked but still runs pocketbase — the volume was never released"
+            docker logs pb-old; exit 1
+          fi
+
+          # And it still answers SIGTERM once ACA finally drains it.
+          docker stop -t 20 pb-old
+          test "$(docker inspect -f '{{.State.ExitCode}}' pb-old)" = "0" \
+            || (echo "parked replica did not shut down cleanly"; docker logs pb-old; exit 1)
 
           docker rm -f pb-old pb-new
           docker volume rm pb-handover-test

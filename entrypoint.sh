@@ -21,9 +21,10 @@ HANDOVER_FILE=/pb_data/.pb_handover
 # mechanism.
 HANDOVER_TIMEOUT=${PB_HANDOVER_TIMEOUT:-60}
 HANDOVER_POLL=2
-# Identifies this container to the other one. Any value works as long as two
-# live replicas never share it.
-INSTANCE_ID="$(hostname 2>/dev/null || echo unknown)-$$"
+# Identifies this REPLICA to the other one. The container hostname is the pod
+# name, which is stable across a container restart inside the same replica —
+# that is deliberate, see start_handover_watcher.
+INSTANCE_ID="${PB_INSTANCE_ID:-$(hostname 2>/dev/null || echo unknown)}"
 
 # Graceful shutdown: drain PocketBase first so in-flight HTTP requests complete
 # and SQLite WAL is checkpointed, THEN signal Litestream so it can replicate the
@@ -48,6 +49,39 @@ shutdown() {
     exit 0
 }
 trap shutdown TERM INT
+
+# Hand /pb_data to an incoming replica WITHOUT exiting.
+#
+# Exiting here looks like a crash to Container Apps, which restarts the
+# container; that restart then races the genuine incoming replica for the lock
+# and can win it, leaving the incoming replica to time out and start unlocked.
+# Observed live on 2026-09-06 22:49. So stop PocketBase, close both databases,
+# drop the lock, and then sit still until ACA drains this replica. Health
+# probes fail while parked, which is correct: traffic belongs to the incoming
+# replica now.
+handover_release() {
+    echo "[entrypoint] handover: stopping pocketbase and releasing /pb_data..."
+    if [ -n "$PB_PID" ]; then
+        kill -TERM "$PB_PID" 2>/dev/null || true
+        wait "$PB_PID" 2>/dev/null || true
+        PB_PID=""
+    fi
+    if [ -n "$LITESTREAM_PID" ]; then
+        kill -TERM "$LITESTREAM_PID" 2>/dev/null || true
+        wait "$LITESTREAM_PID" 2>/dev/null || true
+        LITESTREAM_PID=""
+    fi
+    # Closing fd 9 is what actually releases the single-writer lock.
+    exec 9>&- 2>/dev/null || true
+    echo "[entrypoint] /pb_data released. Parking until this replica is drained."
+    # Never returns — returning would resume run_serve and exit the container,
+    # which is the restart-and-steal behaviour this exists to avoid.
+    while :; do
+        sleep 3600 &
+        wait $! 2>/dev/null || true
+    done
+}
+trap handover_release USR1
 
 # Serialize /pb_data across a rollout, by making the OUTGOING replica leave.
 #
@@ -95,9 +129,12 @@ start_handover_watcher() {
         while :; do
             if [ -f "$HANDOVER_FILE" ]; then
                 requester=$(cat "$HANDOVER_FILE" 2>/dev/null || true)
+                # A request carrying our own id is this replica's container
+                # restarting, not a new replica. Answering it would hand the
+                # volume to ourselves and flap.
                 if [ -n "$requester" ] && [ "$requester" != "$INSTANCE_ID" ]; then
                     echo "[entrypoint] handover requested by '$requester' — releasing /pb_data."
-                    kill -TERM "$MAIN_PID" 2>/dev/null || true
+                    kill -USR1 "$MAIN_PID" 2>/dev/null || true
                     exit 0
                 fi
             fi

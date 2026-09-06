@@ -288,17 +288,31 @@ The incoming replica *asks*; the outgoing one leaves of its own accord instead
 of waiting to be drained:
 
 1. The incoming replica writes its id to `/pb_data/.pb_handover`.
-2. A watcher in the outgoing replica reads an id that is not its own and takes
-   its normal graceful shutdown path — closing both databases and releasing
-   `/pb_data/.pb_singlewriter.lock` without ACA having to drain it.
-3. The incoming replica's `flock` returns, it clears the handover file, starts
+2. A watcher in the outgoing replica reads an id that is not its own, stops
+   PocketBase, closes both databases and releases
+   `/pb_data/.pb_singlewriter.lock` — without ACA having to drain it.
+3. The outgoing replica then **parks**: it stays alive, failing its health
+   probes, until ACA drains it. It must not exit. An exit reads as a crash to
+   Container Apps, which restarts the container, and that restart races the
+   genuine incoming replica for the lock and can win it — observed live on
+   2026-09-06 22:49, where the incoming replica then timed out and started
+   unlocked.
+4. The incoming replica's `flock` returns, it clears the handover file, starts
    its own watcher, and serves.
+
+A handover request carrying the *same* id is this replica's own container
+restarting, not a new replica, and is ignored — otherwise a liveness-probe
+restart of a parked container would make the serving replica hand the volume
+back and flap. The id is the container hostname, which is the pod name and is
+stable across a container restart within one replica.
 
 What this looks like in the console on a healthy rollout:
 
 ```
-[entrypoint] waiting for the previous replica to release /pb_data (up to 60s)...
-[entrypoint] handover requested by 'ca-auth--xxxx-yyyy-7' — releasing /pb_data.   <- outgoing
+[entrypoint] waiting for the previous replica to release /pb_data (up to 60s)...  <- incoming
+[entrypoint] handover requested by 'ca-auth--azd-...-prb44' — releasing /pb_data. <- outgoing
+[entrypoint] handover: stopping pocketbase and releasing /pb_data...              <- outgoing
+[entrypoint] /pb_data released. Parking until this replica is drained.            <- outgoing
 [entrypoint] /pb_data is ours — single writer confirmed.                          <- incoming
 ```
 
