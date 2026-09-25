@@ -260,6 +260,10 @@ sqlite3 /pb_data/data.db "select substr(value,1,60) from _params where id='setti
 Cleartext starts `{"superuserIPs":…`; encrypted is base64. The observed
 ciphertext is the completion criterion for this work — a green deploy is not.
 
+Read [The `PATCH` is the point of no return](#the-patch-is-the-point-of-no-return--and-it-takes-rollback-away)
+before you run it. It is the step that makes the deploy one-way, and it should
+be the *last* thing you do, not the first.
+
 Note the admin API omits `smtp.password` from `GET /api/settings` entirely, so
 the API cannot tell you whether secrets survived the round-trip; the empty
 `PATCH` was verified non-destructive by decrypting the resulting blob directly.
@@ -271,6 +275,39 @@ Once the row is encrypted, `loadParam` cannot fall back — a missing or changed
 is no in-place rotation path for this key. Treat it as durable: keep it in the
 GitHub repo secret **and** a second durable store, and never rotate it without
 first decrypting settings under the old key.
+
+### The `PATCH` is the point of no return — and it takes rollback away
+
+Everything up to the `PATCH` is reversible. The `PATCH` is not, and the way it
+fails is the opposite of every other guard in this file.
+
+**Revision rollback stops working.** Any revision built before settings
+encryption shipped runs an image whose `entrypoint.sh` does not pass
+`--encryptionEnv`, so `EncryptionEnv()` is `""`, `os.Getenv("")` is `""`, and
+the app exits with `invalid settings db data or missing encryption key`. An
+`az containerapp revision activate` onto an older revision therefore does not
+roll anything back — it takes the app down.
+
+**And it takes it down rather than failing safe**, which is the part worth
+internalising before you run the `PATCH`. In `run_serve`, `check_encryption_key`
+deliberately treats an *empty* key as a no-op and returns 0 — correct while
+`_params` is plaintext, because the app reads it fine. `acquire_single_writer`
+runs next, writes `/pb_data/.pb_handover`, and the healthy outgoing replica
+shuts itself down on seeing it. Only *after* that does PocketBase try to read
+`_params` and die. So once the row is ciphertext, an incoming replica with an
+empty or absent `PB_ENCRYPTION_KEY` drains the replica that was serving
+correctly and then fails to replace it. A wrong-*length* key is caught before
+the handover; an *empty* one, by design, is not.
+
+Two operational rules follow:
+
+- **Do the `PATCH` last.** Land every pending change that alters how
+  `PB_ENCRYPTION_KEY` reaches the container — the Key Vault reference cutover in
+  particular — and observe `[entrypoint] settings encryption enabled` in the
+  container log *first*. While `_params` is still plaintext, a delivery mistake
+  costs a failed rollout; afterwards the same mistake costs an outage.
+- **Forward-fix only.** After the `PATCH`, the recovery path for a bad deploy is
+  another deploy that supplies the correct key, not a revision rollback.
 
 ### Encryption does not undo prior exposure
 
