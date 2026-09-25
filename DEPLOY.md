@@ -51,7 +51,7 @@ only supports NFS Azure Files under those conditions.
    azd env set AZURE_LOCATION       <region>           # e.g. westus
    azd env set PB_ADMIN_EMAIL       you@example.com
    azd env set PB_ADMIN_PASSWORD    '<strong-pass>'    # quote to survive zsh
-   azd env set PB_ENCRYPTION_KEY    "$(openssl rand -hex 16)"  # exactly 32 chars; see "Settings encryption at rest"
+   azd env set PB_ENCRYPTION_KEY    "$(openssl rand -hex 16)"  # required, exactly 32 chars; provision fails without it. Keep it — see "Settings encryption at rest"
    azd env set SHARED_OBS_RG        <shared-obs-rg>
    azd env set SHARED_LAW_NAME      <law-name>
    azd env set SHARED_AI_NAME       <app-insights-name>
@@ -157,14 +157,26 @@ ContainerAppConsoleLogs_CL
 
 ## Settings encryption at rest
 
-PocketBase stores the whole settings blob in the `_params` table of `data.db`.
-Left unencrypted, that blob is cleartext JSON holding **every auth collection's
-token-signing secret** (`PasswordResetToken`, `VerificationToken`,
-`EmailChangeToken`, `PasskeyResetToken`) plus the SMTP and S3 backup
-credentials. Those token secrets are what `record.TokenKey() + <X>Token.Secret`
-signs with, so anyone holding one copy of `data.db` — or of a backup — can mint
-a valid password-reset or passkey-reset token for any user, including a
-`_superusers` record, entirely offline. Encrypting it is not optional here.
+PocketBase stores the settings blob in the `_params` table of `data.db`. Left
+unencrypted, that blob is cleartext JSON holding the **SMTP credentials** and
+the **S3 credentials** (both the main `s3` config and the separate
+`backups.s3` one). Encrypting it keeps those out of every copy of `data.db` and
+every nightly backup.
+
+> ⚠️ **Scope: this does not protect the auth token-signing secrets, and it is
+> not a fix for offline token forgery.** Those secrets are *not* in `_params`.
+> `PasswordResetToken`, `VerificationToken`, `EmailChangeToken` and
+> `PasskeyResetToken` live on the **collection**, in `TokenConfig`
+> ([core/collection_model_auth_options.go](core/collection_model_auth_options.go)),
+> and `Collection.DBExport` writes them as plain JSON into `_collections.options`
+> with no encryption path at all. `record.TokenKey()` is likewise a cleartext
+> column. So `key = TokenKey() + <X>Token.Secret` is still fully derivable
+> offline from one copy of `data.db`, with or without this setting. Upstream
+> says as much itself in [core/settings_query.go](core/settings_query.go)
+> (*"the encryption may get removed in the future since it doesn't really
+> accomplish much"*). Reducing who can obtain `data.db` and the S3 backups is
+> the actual control for that exposure — tracked separately; do not read this
+> section as closing it.
 
 ### Both halves are required
 
@@ -194,27 +206,63 @@ azd env set PB_ENCRYPTION_KEY "$(openssl rand -hex 16)"
 azd provision
 ```
 
-Unset means cleartext — the pre-existing behaviour — so the flag ships safely
-ahead of the secret.
+**The parameter is required — there is no default.** A provision from an
+environment without `PB_ENCRYPTION_KEY` fails at `azd provision` preflight
+rather than quietly deploying an empty key. Two details worth knowing:
+
+- An **empty** value is rejected the same as an absent one, which matters
+  because a missing GitHub repo secret expands to `""`, not to "unset".
+- Dropping the `=` default in `main.parameters.json` alone would *not* have
+  done this. azd skips the prompt whenever the bicep parameter has a default,
+  so removing `= ''` from [infra/main.bicep](infra/main.bicep) is what makes it
+  required. Do not re-add that default.
 
 **The key must be exactly 32 bytes.** AES-256 accepts nothing else, and the
 failure is nasty if unchecked: the app boots healthy, the settings stay in
-cleartext, and only the *next settings save* errors out. `entrypoint.sh`
-therefore refuses to start on any other length, before it touches `/pb_data`.
+cleartext, and only the *next settings save* errors out. `@minLength(32)` /
+`@maxLength(32)` reject a wrong-length key at ARM preflight, and
+`entrypoint.sh` repeats the check before it touches `/pb_data` as the backstop
+for the non-azd paths. Both count *characters*; `aes.NewCipher` wants 32
+*bytes*, so stick to the ASCII generator above.
 
-### Existing settings are re-encrypted on the next save, not on boot
+### Required post-deploy step: deploying the key encrypts nothing
 
-Reads try plaintext first and fall back to decrypting, so an already-deployed
-plaintext `_params` row keeps loading normally. The row is only rewritten
-encrypted when settings are next saved. Force it with any settings write from
-the admin UI (toggling a value and saving is enough), then confirm the stored
-value is no longer readable JSON:
+**This is not optional and it is easy to skip, because the app looks completely
+healthy without it.** Encryption happens in `Settings.DBExport`, which only runs
+on a settings **save**. Nothing saves settings on boot — the only two callers of
+`Save(Settings())` in the tree fire when the `_params` row is *missing*
+([core/settings_query.go](core/settings_query.go)) and on a collection rename
+that rewrites rate-limit labels ([core/settings_model.go](core/settings_model.go)).
+Reads try plaintext first and fall back to decrypting, so an existing plaintext
+row keeps loading normally, forever.
+
+So after the deploy is healthy, the state is: key wired, app up, **SMTP and S3
+credentials still cleartext in `data.db` and in every nightly backup** until
+someone writes settings. Force the rewrite with an empty superuser `PATCH`,
+which preserves existing values:
+
+```sh
+TOKEN=$(curl -s -X POST "$PB_URL/api/collections/_superusers/auth-with-password" \
+  -H 'Content-Type: application/json' \
+  -d '{"identity":"<superuser-email>","password":"<superuser-password>"}' | jq -r .token)
+
+curl -s -X PATCH "$PB_URL/api/settings" \
+  -H "Authorization: $TOKEN" -H 'Content-Type: application/json' -d '{}'
+```
+
+Any settings write from the admin UI works too. Then **confirm it** — do not
+assume:
 
 ```sh
 sqlite3 /pb_data/data.db "select substr(value,1,60) from _params where id='settings';"
 ```
 
-Cleartext starts `{"smtp":…`; encrypted is base64.
+Cleartext starts `{"superuserIPs":…`; encrypted is base64. The observed
+ciphertext is the completion criterion for this work — a green deploy is not.
+
+Note the admin API omits `smtp.password` from `GET /api/settings` entirely, so
+the API cannot tell you whether secrets survived the round-trip; the empty
+`PATCH` was verified non-destructive by decrypting the resulting blob directly.
 
 ### Do not remove or change the key afterwards
 
@@ -227,9 +275,14 @@ first decrypting settings under the old key.
 ### Encryption does not undo prior exposure
 
 Every backup taken before this was enabled contains the secrets in cleartext.
-Enabling encryption protects future copies only — the token, SMTP and S3
-credentials that were already at rest in cleartext still have to be rotated
-separately.
+Enabling encryption protects future copies only — the SMTP and S3 credentials
+(in **both** the main `s3` config and `backups.s3`) that were already at rest in
+cleartext still have to be rotated separately.
+
+Rotating the **collection token secrets** is containment for past exposure only.
+Per the scope warning at the top of this section they are not in `_params`, so
+new values land right back in cleartext `_collections.options` — rotation does
+not make the next copy of `data.db` any less exploitable.
 
 ## Backups & disaster recovery
 
@@ -279,6 +332,17 @@ To restore, use the dashboard: *Settings → Backups → upload/select a backup 
 Restore*. PocketBase swaps `pb_data` and self-restarts via `syscall.Exec`.
 Expect to lose up to one backup interval (24 h) of writes — for this app that
 means recently enrolled passkeys, whose owners will need to re-register.
+
+> ⚠️ **A backup is not sufficient to restore. You also need `PB_ENCRYPTION_KEY`.**
+> Since [settings encryption](#settings-encryption-at-rest) was enabled, a
+> `data.db` whose `_params` row is encrypted is unreadable without that exact
+> key — restored into an environment that does not have it, the app **will not
+> boot** (`invalid settings db data or missing encryption key`). There is no
+> recovery from that and no in-place rotation. The key is a **second required
+> restore artifact** alongside the backup itself, and it is not in the backup.
+> Confirm you can retrieve it *before* you start a restore: GitHub repo secret
+> `PB_ENCRYPTION_KEY`, plus the separate durable copy. A backup taken before
+> encryption was enabled restores fine either way.
 
 ### Recovering a corrupt `auxiliary.db`
 

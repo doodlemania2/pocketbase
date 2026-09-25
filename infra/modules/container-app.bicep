@@ -33,7 +33,7 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
-@description('AES-256 key for settings-at-rest encryption. MUST be exactly 32 characters — the entrypoint refuses to start on any other length, because a bad key leaves settings in cleartext and only fails on the next settings save. Empty leaves settings in cleartext (the pre-existing behaviour). WARNING: once settings are encrypted, removing or changing this value makes the app unable to read them and it will not boot. Treat it as durable, not rotatable in place.')
+@description('AES-256 key for settings-at-rest encryption. MUST be exactly 32 characters — the entrypoint refuses to start on any other length, because a bad key leaves settings in cleartext and only fails on the next settings save. main.bicep declares this parameter with no default and always passes a value, so the empty case below is unreachable on the azd path and exists only for a direct module deployment. WARNING: once settings are encrypted, removing or changing this value makes the app unable to read them and it will not boot. Treat it as durable, not rotatable in place.')
 @secure()
 param pbEncryptionKey string = ''
 

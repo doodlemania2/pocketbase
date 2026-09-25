@@ -214,6 +214,16 @@ acquire_single_writer() {
 # This runs before acquire_single_writer on purpose. Exiting here must happen
 # before we touch /pb_data, or a crashlooping container would repeatedly ask the
 # healthy outgoing replica to hand over the volume and then die (#35).
+#
+# An *empty* key is deliberately not fatal here. PocketBase reads plaintext
+# settings first and only falls back to decrypting, so a plaintext database with
+# no key boots fine, and nothing on the boot path rewrites settings — the
+# "key present but blob still plaintext" window is unbounded, not a startup
+# race. Failing closed on empty would therefore refuse to start a database the
+# app could read perfectly well, on the one path that must stay fail-open (#35).
+# The absent-key case is caught at the provisioning layer instead, where the
+# bicep parameter has no default and a missing value fails `azd provision`
+# before any replica starts.
 check_encryption_key() {
     if [ -z "$PB_ENCRYPTION_KEY" ]; then
         return 0
