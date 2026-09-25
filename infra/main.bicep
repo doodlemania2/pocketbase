@@ -17,6 +17,10 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
+@description('AES-256 key for settings-at-rest encryption; exactly 32 characters. Empty leaves settings in cleartext. Once set and applied, do not remove or change it — the app cannot read settings encrypted under a different key and will fail to boot.')
+@secure()
+param pbEncryptionKey string = ''
+
 @description('Resource group hosting the shared Log Analytics workspace and Application Insights instance. Required when reusing central observability across RGs.')
 param sharedObservabilityResourceGroup string
 
@@ -142,6 +146,7 @@ module containerApp 'modules/container-app.bicep' = {
     subnetId: network.outputs.subnetId
     pbAdminEmail: pbAdminEmail
     pbAdminPassword: pbAdminPassword
+    pbEncryptionKey: pbEncryptionKey
     logAnalyticsWorkspaceId: sharedLaw.id
     logAnalyticsCustomerId: sharedLaw.properties.customerId
     appInsightsConnectionString: sharedAppInsights.properties.ConnectionString

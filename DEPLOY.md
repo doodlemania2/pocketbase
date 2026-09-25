@@ -44,6 +44,7 @@ only supports NFS Azure Files under those conditions.
    azd env set AZURE_LOCATION       <region>           # e.g. westus
    azd env set PB_ADMIN_EMAIL       you@example.com
    azd env set PB_ADMIN_PASSWORD    '<strong-pass>'    # quote to survive zsh
+   azd env set PB_ENCRYPTION_KEY    "$(openssl rand -hex 16)"  # exactly 32 chars; see "Settings encryption at rest"
    azd env set SHARED_OBS_RG        <shared-obs-rg>
    azd env set SHARED_LAW_NAME      <law-name>
    azd env set SHARED_AI_NAME       <app-insights-name>
@@ -146,6 +147,82 @@ ContainerAppConsoleLogs_CL
 | order by TimeGenerated desc
 | take 200
 ```
+
+## Settings encryption at rest
+
+PocketBase stores the whole settings blob in the `_params` table of `data.db`.
+Left unencrypted, that blob is cleartext JSON holding **every auth collection's
+token-signing secret** (`PasswordResetToken`, `VerificationToken`,
+`EmailChangeToken`, `PasskeyResetToken`) plus the SMTP and S3 backup
+credentials. Those token secrets are what `record.TokenKey() + <X>Token.Secret`
+signs with, so anyone holding one copy of `data.db` — or of a backup — can mint
+a valid password-reset or passkey-reset token for any user, including a
+`_superusers` record, entirely offline. Encrypting it is not optional here.
+
+### Both halves are required
+
+`core/settings_model.go` encrypts only when `os.Getenv(app.EncryptionEnv())` is
+non-empty, and `EncryptionEnv()` is the empty string unless the binary is
+started with `--encryptionEnv=<VAR>`. `os.Getenv("")` is always `""`, so
+**setting `PB_ENCRYPTION_KEY` on its own changes nothing.** The two halves are:
+
+- `entrypoint.sh` passes `--encryptionEnv=PB_ENCRYPTION_KEY` on every invocation
+  (it is a *persistent* root flag, so the `superuser` and subcommand paths
+  repeat it too — a serve-only flag would leave those unable to read settings).
+- `PB_ENCRYPTION_KEY` is delivered as a Container Apps secret from the
+  `pbEncryptionKey` secure parameter.
+
+### Turning it on
+
+| Setting | Kind | Value |
+|---|---|---|
+| `PB_ENCRYPTION_KEY` | **secret** | exactly 32 characters, e.g. `openssl rand -hex 16` |
+
+```sh
+# GitHub Actions deploy path
+gh secret set PB_ENCRYPTION_KEY --repo doodlemania2/pocketbase
+
+# or locally
+azd env set PB_ENCRYPTION_KEY "$(openssl rand -hex 16)"
+azd provision
+```
+
+Unset means cleartext — the pre-existing behaviour — so the flag ships safely
+ahead of the secret.
+
+**The key must be exactly 32 bytes.** AES-256 accepts nothing else, and the
+failure is nasty if unchecked: the app boots healthy, the settings stay in
+cleartext, and only the *next settings save* errors out. `entrypoint.sh`
+therefore refuses to start on any other length, before it touches `/pb_data`.
+
+### Existing settings are re-encrypted on the next save, not on boot
+
+Reads try plaintext first and fall back to decrypting, so an already-deployed
+plaintext `_params` row keeps loading normally. The row is only rewritten
+encrypted when settings are next saved. Force it with any settings write from
+the admin UI (toggling a value and saving is enough), then confirm the stored
+value is no longer readable JSON:
+
+```sh
+sqlite3 /pb_data/data.db "select substr(value,1,60) from _params where id='settings';"
+```
+
+Cleartext starts `{"smtp":…`; encrypted is base64.
+
+### Do not remove or change the key afterwards
+
+Once the row is encrypted, `loadParam` cannot fall back — a missing or changed
+`PB_ENCRYPTION_KEY` makes settings unreadable and the app will not boot. There
+is no in-place rotation path for this key. Treat it as durable: keep it in the
+GitHub repo secret **and** a second durable store, and never rotate it without
+first decrypting settings under the old key.
+
+### Encryption does not undo prior exposure
+
+Every backup taken before this was enabled contains the secrets in cleartext.
+Enabling encryption protects future copies only — the token, SMTP and S3
+credentials that were already at rest in cleartext still have to be rotated
+separately.
 
 ## Backups & disaster recovery
 

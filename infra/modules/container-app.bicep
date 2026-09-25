@@ -33,6 +33,10 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
+@description('AES-256 key for settings-at-rest encryption. MUST be exactly 32 characters — the entrypoint refuses to start on any other length, because a bad key leaves settings in cleartext and only fails on the next settings save. Empty leaves settings in cleartext (the pre-existing behaviour). WARNING: once settings are encrypted, removing or changing this value makes the app unable to read them and it will not boot. Treat it as durable, not rotatable in place.')
+@secure()
+param pbEncryptionKey string = ''
+
 @description('Resource ID of the shared Log Analytics workspace')
 param logAnalyticsWorkspaceId string
 
@@ -198,6 +202,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         { name: 'pb-admin-email', value: pbAdminEmail }
       ], empty(pbAdminPassword) ? [] : [
         { name: 'pb-admin-password', value: pbAdminPassword }
+      ], empty(pbEncryptionKey) ? [] : [
+        { name: 'pb-encryption-key', value: pbEncryptionKey }
       ], empty(otlpAuthHeader) ? [] : [
         { name: 'otlp-auth-header', value: otlpAuthHeader }
       ])
@@ -241,6 +247,11 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'PB_ADMIN_EMAIL', secretRef: 'pb-admin-email' }
           ], empty(pbAdminPassword) ? [] : [
             { name: 'PB_ADMIN_PASSWORD', secretRef: 'pb-admin-password' }
+          ], empty(pbEncryptionKey) ? [] : [
+            // entrypoint.sh always passes --encryptionEnv=PB_ENCRYPTION_KEY, so
+            // this variable alone decides whether settings are encrypted at
+            // rest. Omitting it is the pre-existing cleartext behaviour.
+            { name: 'PB_ENCRYPTION_KEY', secretRef: 'pb-encryption-key' }
           ], empty(webauthnRpId) ? [] : [
             { name: 'WEBAUTHN_RP_ID', value: webauthnRpId }
           ], empty(webauthnRpOrigins) ? [] : [

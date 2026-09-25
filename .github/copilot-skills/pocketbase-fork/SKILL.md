@@ -116,7 +116,7 @@ Multi-stage: `golang:1.27-alpine` (build) -> `alpine:3` (runtime with Litestream
 | `LITESTREAM_REPLICA_URL` | - | Azure Blob URL for backup (e.g., `abs://container-name`) |
 | `LITESTREAM_ACCESS_KEY_ID` | - | Storage account name |
 | `LITESTREAM_SECRET_ACCESS_KEY` | - | Storage account key |
-| `ENCRYPTION` | - | 32-char hex key for settings encryption |
+| `PB_ENCRYPTION_KEY` | - | Exactly 32 chars. Encrypts the settings blob at rest; unset leaves it as cleartext JSON. Paired with `--encryptionEnv=PB_ENCRYPTION_KEY`, which `entrypoint.sh` always passes — the variable alone does nothing. Removing it after settings are encrypted stops the app booting. See DEPLOY.md. |
 
 ### Litestream Backup
 
