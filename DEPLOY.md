@@ -9,6 +9,13 @@ End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with 
 > backup cron. See [Backups & disaster recovery](#backups--disaster-recovery)
 > before you rely on anything in this file for a restore.
 
+> **Any push to `deploy/azure` deploys to production.** `.github/workflows/deploy.yml`
+> runs `azd up` on every push to that branch, including a commit that only touches
+> docs. Because the app runs at `maxReplicas: 1` (SQLite has one writer), every such
+> deploy is a full-downtime revision swap through the `/pb_data` handover path in
+> `entrypoint.sh`. Land changes via a pull request into `deploy/azure` and merge when
+> someone can watch the rollout — never commit to the branch directly.
+
 > Throughout this document, replace `<...>` placeholders with values from your environment. The repo ships zero environment-specific defaults — real values live in `.azure/<envName>/.env` (gitignored).
 
 ## Topology
