@@ -17,21 +17,6 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
-@description('AES-256 key for settings-at-rest encryption; exactly 32 characters. Deliberately has NO default: once settings are encrypted the app cannot boot without this exact value, so a provision from an environment that is missing it must fail here — at preflight, before any replica starts — rather than silently provisioning an empty key. azd treats a bicep default as "parameter satisfied" and would otherwise skip the prompt under --no-prompt. Do not remove or change the value after it has been applied.')
-@secure()
-@minLength(32)
-@maxLength(32)
-param pbEncryptionKey string
-
-@description('Resource group hosting the shared Log Analytics workspace and Application Insights instance. Required when reusing central observability across RGs.')
-param sharedObservabilityResourceGroup string
-
-@description('Name of the shared Log Analytics workspace (cross-RG existing reference)')
-param sharedLogAnalyticsWorkspaceName string
-
-@description('Name of the shared Application Insights instance (cross-RG existing reference)')
-param sharedApplicationInsightsName string
-
 @description('Resource group name for this deployment. Defaults to rg-<environmentName>.')
 param resourceGroupName string = 'rg-${environmentName}'
 
@@ -91,17 +76,6 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   tags: tags
 }
 
-// Reference shared central observability resources (cross-RG)
-resource sharedLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
-  name: sharedLogAnalyticsWorkspaceName
-  scope: resourceGroup(sharedObservabilityResourceGroup)
-}
-
-resource sharedAppInsights 'Microsoft.Insights/components@2020-02-02' existing = {
-  name: sharedApplicationInsightsName
-  scope: resourceGroup(sharedObservabilityResourceGroup)
-}
-
 module acr 'modules/acr.bicep' = {
   name: 'acr'
   scope: rg
@@ -148,10 +122,6 @@ module containerApp 'modules/container-app.bicep' = {
     subnetId: network.outputs.subnetId
     pbAdminEmail: pbAdminEmail
     pbAdminPassword: pbAdminPassword
-    pbEncryptionKey: pbEncryptionKey
-    logAnalyticsWorkspaceId: sharedLaw.id
-    logAnalyticsCustomerId: sharedLaw.properties.customerId
-    appInsightsConnectionString: sharedAppInsights.properties.ConnectionString
     customDomain: customDomain
     bindCertificate: bindCertificate
     containerImage: containerImage

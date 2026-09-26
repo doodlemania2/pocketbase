@@ -33,20 +33,6 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
-@description('AES-256 key for settings-at-rest encryption. MUST be exactly 32 characters — the entrypoint refuses to start on any other length, because a bad key leaves settings in cleartext and only fails on the next settings save. main.bicep declares this parameter with no default and always passes a value, so the empty case below is unreachable on the azd path and exists only for a direct module deployment. WARNING: once settings are encrypted, removing or changing this value makes the app unable to read them and it will not boot. Treat it as durable, not rotatable in place.')
-@secure()
-param pbEncryptionKey string = ''
-
-@description('Resource ID of the shared Log Analytics workspace')
-param logAnalyticsWorkspaceId string
-
-@description('Customer ID (GUID) of the shared Log Analytics workspace')
-param logAnalyticsCustomerId string
-
-@description('Connection string for the shared Application Insights instance')
-@secure()
-param appInsightsConnectionString string
-
 @description('Custom domain (e.g., auth.example.com). Leave empty to skip binding/managed cert.')
 param customDomain string = ''
 
@@ -83,12 +69,6 @@ param otelEnvironment string = ''
 
 @description('Minimum log level exported to the collector (DEBUG|INFO|WARN|ERROR). Empty exports everything, which for this app is ~8.6k health-probe records/day. Local SQLite logging is unaffected either way.')
 param otelMinLevel string = ''
-
-// Reference the shared Log Analytics workspace (cross-RG) to fetch its shared key for Container Apps env wiring
-resource sharedLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
-  name: last(split(logAnalyticsWorkspaceId, '/'))
-  scope: resourceGroup(split(logAnalyticsWorkspaceId, '/')[4])
-}
 
 // Managed Identity
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -130,12 +110,9 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   location: location
   tags: tags
   properties: {
+    // Azure Log Analytics / App Insights are retired; telemetry goes to SigNoz over OTLP.
     appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logAnalyticsCustomerId
-        sharedKey: sharedLaw.listKeys().primarySharedKey
-      }
+      destination: 'none'
     }
     workloadProfiles: [
       {
@@ -196,14 +173,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: environment.id
     configuration: {
       activeRevisionsMode: 'Single'
-      secrets: concat([
-        { name: 'appinsights-connection-string', value: appInsightsConnectionString }
-      ], empty(pbAdminEmail) ? [] : [
+      secrets: concat([], empty(pbAdminEmail) ? [] : [
         { name: 'pb-admin-email', value: pbAdminEmail }
       ], empty(pbAdminPassword) ? [] : [
         { name: 'pb-admin-password', value: pbAdminPassword }
-      ], empty(pbEncryptionKey) ? [] : [
-        { name: 'pb-encryption-key', value: pbEncryptionKey }
       ], empty(otlpAuthHeader) ? [] : [
         { name: 'otlp-auth-header', value: otlpAuthHeader }
       ])
@@ -242,16 +215,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: concat([
             { name: 'PB_HOST', value: '0.0.0.0' }
             { name: 'PB_PORT', value: '8090' }
-            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', secretRef: 'appinsights-connection-string' }
           ], empty(pbAdminEmail) ? [] : [
             { name: 'PB_ADMIN_EMAIL', secretRef: 'pb-admin-email' }
           ], empty(pbAdminPassword) ? [] : [
             { name: 'PB_ADMIN_PASSWORD', secretRef: 'pb-admin-password' }
-          ], empty(pbEncryptionKey) ? [] : [
-            // entrypoint.sh always passes --encryptionEnv=PB_ENCRYPTION_KEY, so
-            // this variable alone decides whether settings are encrypted at
-            // rest. Omitting it is the pre-existing cleartext behaviour.
-            { name: 'PB_ENCRYPTION_KEY', secretRef: 'pb-encryption-key' }
           ], empty(webauthnRpId) ? [] : [
             { name: 'WEBAUTHN_RP_ID', value: webauthnRpId }
           ], empty(webauthnRpOrigins) ? [] : [
