@@ -116,7 +116,7 @@ Multi-stage: `golang:1.27-alpine` (build) -> `alpine:3` (runtime with Litestream
 | `LITESTREAM_REPLICA_URL` | - | Azure Blob URL for backup (e.g., `abs://container-name`) |
 | `LITESTREAM_ACCESS_KEY_ID` | - | Storage account name |
 | `LITESTREAM_SECRET_ACCESS_KEY` | - | Storage account key |
-| `ENCRYPTION` | - | 32-char hex key for settings encryption |
+| `PB_ENCRYPTION_KEY` | **required** | Exactly 32 chars. Encrypts the `_params` settings blob at rest, which covers the **SMTP and S3 credentials only** — auth token-signing secrets live on the collection in `_collections.options` and stay cleartext. Paired with `--encryptionEnv=PB_ENCRYPTION_KEY`, which `entrypoint.sh` always passes — the variable alone does nothing. The bicep param has no default, so absent/empty fails `azd provision`. Encrypts on the next settings *save*, not on boot. Removing it afterwards stops the app booting. See DEPLOY.md. |
 
 ### Litestream Backup
 

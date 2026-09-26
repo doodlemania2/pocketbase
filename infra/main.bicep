@@ -17,6 +17,12 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
+@description('AES-256 key for settings-at-rest encryption; exactly 32 characters. Deliberately has NO default: once settings are encrypted the app cannot boot without this exact value, so a provision from an environment that is missing it must fail here — at preflight, before any replica starts — rather than silently provisioning an empty key. azd treats a bicep default as "parameter satisfied" and would otherwise skip the prompt under --no-prompt. Do not remove or change the value after it has been applied.')
+@secure()
+@minLength(32)
+@maxLength(32)
+param pbEncryptionKey string
+
 @description('Resource group hosting the shared Log Analytics workspace and Application Insights instance. Required when reusing central observability across RGs.')
 param sharedObservabilityResourceGroup string
 
@@ -142,6 +148,7 @@ module containerApp 'modules/container-app.bicep' = {
     subnetId: network.outputs.subnetId
     pbAdminEmail: pbAdminEmail
     pbAdminPassword: pbAdminPassword
+    pbEncryptionKey: pbEncryptionKey
     logAnalyticsWorkspaceId: sharedLaw.id
     logAnalyticsCustomerId: sharedLaw.properties.customerId
     appInsightsConnectionString: sharedAppInsights.properties.ConnectionString
