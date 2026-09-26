@@ -5,19 +5,8 @@ set -e
 HOST=${PB_HOST:-0.0.0.0}
 PORT=${PB_PORT:-8090}
 
-# Default serve command arguments.
-#
-# --encryptionEnv is what turns settings-at-rest encryption on. It is NOT
-# enough to set PB_ENCRYPTION_KEY: core/settings_model.go reads
-# os.Getenv(app.EncryptionEnv()), and EncryptionEnv() is the zero value ""
-# unless this flag names the variable, so os.Getenv("") is always "" and the
-# plaintext branch is always taken. Both halves are required.
-#
-# Passing the flag with PB_ENCRYPTION_KEY unset is a no-op — an empty key takes
-# the same plaintext branch as before — so this is safe to ship ahead of the
-# secret. Anything in "$@" is appended after these, and pflag lets the last
-# occurrence win, so an explicit --encryptionEnv still overrides this.
-DEFAULT_SERVE_ARGS="serve --http=${HOST}:${PORT} --dir=/pb_data --publicDir=/pb_public --hooksDir=/pb_hooks --encryptionEnv=PB_ENCRYPTION_KEY"
+# Default serve command arguments
+DEFAULT_SERVE_ARGS="serve --http=${HOST}:${PORT} --dir=/pb_data --publicDir=/pb_public --hooksDir=/pb_hooks"
 
 LITESTREAM_PID=""
 PB_PID=""
@@ -202,41 +191,6 @@ acquire_single_writer() {
     rm -f "$HANDOVER_FILE" 2>/dev/null || true
 }
 
-# Reject a PB_ENCRYPTION_KEY that AES-256 cannot accept.
-#
-# security.Encrypt() calls aes.NewCipher, which requires exactly 32 bytes. A key
-# of any other length does not fail at boot — it fails later, inside
-# Settings.DBExport, so the app comes up looking healthy and every settings save
-# errors out while the settings themselves stay in cleartext. That is the worst
-# possible outcome for a control whose whole job is to not be silently absent,
-# so refuse to start instead.
-#
-# This runs before acquire_single_writer on purpose. Exiting here must happen
-# before we touch /pb_data, or a crashlooping container would repeatedly ask the
-# healthy outgoing replica to hand over the volume and then die (#35).
-#
-# An *empty* key is deliberately not fatal here. PocketBase reads plaintext
-# settings first and only falls back to decrypting, so a plaintext database with
-# no key boots fine, and nothing on the boot path rewrites settings — the
-# "key present but blob still plaintext" window is unbounded, not a startup
-# race. Failing closed on empty would therefore refuse to start a database the
-# app could read perfectly well, on the one path that must stay fail-open (#35).
-# The absent-key case is caught at the provisioning layer instead, where the
-# bicep parameter has no default and a missing value fails `azd provision`
-# before any replica starts.
-check_encryption_key() {
-    if [ -z "$PB_ENCRYPTION_KEY" ]; then
-        return 0
-    fi
-    if [ "${#PB_ENCRYPTION_KEY}" -ne 32 ]; then
-        echo "[entrypoint] FATAL: PB_ENCRYPTION_KEY must be exactly 32 bytes (AES-256); got ${#PB_ENCRYPTION_KEY}."
-        echo "[entrypoint]        Settings would stay in cleartext and every settings save would fail."
-        echo "[entrypoint]        Generate one with: openssl rand -hex 16"
-        exit 1
-    fi
-    echo "[entrypoint] settings encryption enabled (PB_ENCRYPTION_KEY)."
-}
-
 litestream_restore() {
     if [ -n "$LITESTREAM_REPLICA_URL" ] && [ ! -f /pb_data/data.db ]; then
         echo "[entrypoint] no database found — attempting Litestream restore..."
@@ -269,10 +223,7 @@ create_superuser() {
             return 0
             ;;
     esac
-    # --encryptionEnv is a PERSISTENT root flag, so it has to be repeated here.
-    # `superuser create` bootstraps the app and loads the settings param; once
-    # the settings are encrypted, omitting it makes this fail to read them.
-    out=$(/usr/local/bin/pocketbase superuser create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb_data --encryptionEnv=PB_ENCRYPTION_KEY 2>&1) || true
+    out=$(/usr/local/bin/pocketbase superuser create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb_data 2>&1) || true
     case "$out" in
         ""|*"already exists"*|*"UNIQUE constraint"*|*"Successfully"*) ;;
         *) echo "[entrypoint] superuser create: $out" ;;
@@ -282,9 +233,6 @@ create_superuser() {
 run_serve() {
     # The main shell's pid, for the watcher subshell to signal.
     MAIN_PID=$$
-
-    # Before /pb_data is touched at all — see check_encryption_key.
-    check_encryption_key
 
     # Before anything opens data.db or auxiliary.db — ahead of the Litestream
     # restore and the superuser bootstrap below.
@@ -339,7 +287,4 @@ fi
 
 # Otherwise: subcommand passthrough (migrate, superuser, …) — no Litestream
 # supervision, no graceful trap, because these are short-lived admin commands.
-# --encryptionEnv is persistent on the root command and goes ahead of the
-# subcommand, so these can still read encrypted settings.
-check_encryption_key
-exec /usr/local/bin/pocketbase --encryptionEnv=PB_ENCRYPTION_KEY "$@"
+exec /usr/local/bin/pocketbase "$@"

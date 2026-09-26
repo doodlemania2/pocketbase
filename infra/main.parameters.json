@@ -14,9 +14,6 @@
     "pbAdminPassword": {
       "value": "${PB_ADMIN_PASSWORD}"
     },
-    "pbEncryptionKey": {
-      "value": "${PB_ENCRYPTION_KEY}"
-    },
     "customDomain": {
       "value": "${CUSTOM_DOMAIN=}"
     },

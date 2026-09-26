@@ -38,16 +38,6 @@ jobs:
           AZD_INITIAL_ENVIRONMENT_CONFIG: ${{ secrets.AZD_INITIAL_ENVIRONMENT_CONFIG }}
           PB_ADMIN_EMAIL: ${{ secrets.PB_ADMIN_EMAIL }}
           PB_ADMIN_PASSWORD: ${{ secrets.PB_ADMIN_PASSWORD }}
-          # Settings-at-rest encryption key (exactly 32 chars). REQUIRED — the
-          # bicep param has no default, so a missing or empty value fails at
-          # `azd provision` preflight and this job goes red. That is deliberate:
-          # failing here costs nothing, whereas provisioning an empty key looks
-          # like success while leaving settings in cleartext. Note a missing
-          # repo secret expands to the empty string, not to "unset", and both
-          # are rejected. Once applied, DO NOT remove or change the value — the
-          # app cannot decrypt settings written under a different key and will
-          # not boot. See DEPLOY.md.
-          PB_ENCRYPTION_KEY: ${{ secrets.PB_ENCRYPTION_KEY }}
           SHARED_AI_NAME: ${{ vars.SHARED_AI_NAME }}
           SHARED_LAW_NAME: ${{ vars.SHARED_LAW_NAME }}
           SHARED_OBS_RG: ${{ vars.SHARED_OBS_RG }}
