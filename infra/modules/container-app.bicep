@@ -111,8 +111,9 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   tags: tags
   properties: {
     // Azure Log Analytics / App Insights are retired; telemetry goes to SigNoz over OTLP.
+    // ARM rejects the string 'none'; a null destination is how "no logs" is expressed.
     appLogsConfiguration: {
-      destination: 'none'
+      destination: null
     }
     workloadProfiles: [
       {
