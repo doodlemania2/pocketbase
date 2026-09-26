@@ -17,15 +17,6 @@ param pbAdminEmail string = ''
 @secure()
 param pbAdminPassword string = ''
 
-@description('Resource group hosting the shared Log Analytics workspace and Application Insights instance. Required when reusing central observability across RGs.')
-param sharedObservabilityResourceGroup string
-
-@description('Name of the shared Log Analytics workspace (cross-RG existing reference)')
-param sharedLogAnalyticsWorkspaceName string
-
-@description('Name of the shared Application Insights instance (cross-RG existing reference)')
-param sharedApplicationInsightsName string
-
 @description('Resource group name for this deployment. Defaults to rg-<environmentName>.')
 param resourceGroupName string = 'rg-${environmentName}'
 
@@ -85,17 +76,6 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   tags: tags
 }
 
-// Reference shared central observability resources (cross-RG)
-resource sharedLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
-  name: sharedLogAnalyticsWorkspaceName
-  scope: resourceGroup(sharedObservabilityResourceGroup)
-}
-
-resource sharedAppInsights 'Microsoft.Insights/components@2020-02-02' existing = {
-  name: sharedApplicationInsightsName
-  scope: resourceGroup(sharedObservabilityResourceGroup)
-}
-
 module acr 'modules/acr.bicep' = {
   name: 'acr'
   scope: rg
@@ -142,9 +122,6 @@ module containerApp 'modules/container-app.bicep' = {
     subnetId: network.outputs.subnetId
     pbAdminEmail: pbAdminEmail
     pbAdminPassword: pbAdminPassword
-    logAnalyticsWorkspaceId: sharedLaw.id
-    logAnalyticsCustomerId: sharedLaw.properties.customerId
-    appInsightsConnectionString: sharedAppInsights.properties.ConnectionString
     customDomain: customDomain
     bindCertificate: bindCertificate
     containerImage: containerImage
