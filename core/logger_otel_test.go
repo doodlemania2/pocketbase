@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pocketbase/pocketbase/tools/logger"
 )
 
 var errSinkFailed = errors.New("sink failed")
@@ -368,4 +370,58 @@ func TestSinkReporterConcurrentReports(t *testing.T) {
 	if remote.count() != 1 {
 		t.Fatalf("expected the rate limit to hold under concurrency, got %d records", remote.count())
 	}
+}
+
+// Regression for #53: with OTLP export on, app.Logger() is a fanoutHandler, and
+// the settings-reload hook must still reach the local BatchHandler's level.
+func TestSettingsReloadUpdatesLocalLevelWithOTLP(t *testing.T) {
+	// nothing listens here; the exporter only dials when a batch is flushed
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+
+	app := NewBaseApp(BaseAppConfig{DataDir: t.TempDir()})
+	defer app.ClearBootstrap()
+
+	if err := app.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := app.Logger().Handler().(*fanoutHandler); !ok {
+		t.Fatalf("expected the OTLP fanout handler, got %T", app.Logger().Handler())
+	}
+
+	local := app.Logger().Handler().(*fanoutHandler).local
+	ctx := context.Background()
+
+	app.Settings().Logs.MinLevel = int(slog.LevelError)
+	if err := app.Save(app.Settings()); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	if local.Enabled(ctx, slog.LevelWarn) {
+		t.Fatal("expected WARN to be disabled on the local sink after raising the min level to ERROR")
+	}
+	if !local.Enabled(ctx, slog.LevelError) {
+		t.Fatal("expected ERROR to stay enabled on the local sink")
+	}
+}
+
+func TestFanoutHandlerSetLevelForwardsToLocal(t *testing.T) {
+	local := logger.NewBatchHandler(logger.BatchOptions{
+		Level:     slog.LevelInfo,
+		WriteFunc: func(context.Context, []*logger.Log) error { return nil },
+	})
+	remote := &recordingHandler{enabled: true}
+	h := &fanoutHandler{local: local, remote: remote, minLevel: slog.LevelWarn}
+
+	h.SetLevel(slog.LevelError)
+
+	if local.Enabled(context.Background(), slog.LevelWarn) {
+		t.Fatal("expected the local level to be raised to ERROR")
+	}
+	if h.minLevel != slog.LevelWarn {
+		t.Fatalf("expected the OTLP minLevel to be untouched, got %v", h.minLevel)
+	}
+
+	// a local sink without SetLevel must not panic
+	(&fanoutHandler{local: &recordingHandler{}, remote: remote}).SetLevel(slog.LevelError)
 }

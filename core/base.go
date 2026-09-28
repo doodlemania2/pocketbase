@@ -1653,7 +1653,9 @@ func (app *BaseApp) initLogger() error {
 			}
 
 			if e.App.Logger() != nil {
-				if h, ok := e.App.Logger().Handler().(*logger.BatchHandler); ok {
+				// fork-local: an interface rather than *logger.BatchHandler, so the
+				// level also reaches the local sink through the OTLP fanoutHandler (#53)
+				if h, ok := e.App.Logger().Handler().(levelSetter); ok {
 					h.SetLevel(getLoggerMinLevel(e.App))
 				}
 			}
