@@ -297,41 +297,83 @@ of waiting to be drained:
    genuine incoming replica for the lock and can win it — observed live on
    2026-09-06 22:49, where the incoming replica then timed out and started
    unlocked.
-4. The incoming replica's `flock` returns, it clears the handover file, starts
-   its own watcher, and serves.
+4. The outgoing replica records its own id in `/pb_data/.pb_released` and
+   writes the incoming replica's id to `/pb_data/.pb_handover_ack`.
+5. The incoming replica holds the lock **and** sees its own id in the ack. It
+   writes itself to `/pb_data/.pb_owner`, clears the request, starts its own
+   watcher, and serves.
 
-A handover request carrying the *same* id is this replica's own container
-restarting, not a new replica, and is ignored — otherwise a liveness-probe
-restart of a parked container would make the serving replica hand the volume
-back and flap. The id is the container hostname, which is the pod name and is
-stable across a container restart within one replica.
+### What went wrong on 2026-09-28, and the #54 hardening
+
+The first version (steps 1–3, with the lock as the only proof) still let two
+writers overlap on the v0.40.4 deploy. The incoming replica logged `WARN: no
+handover after 60s` against an outgoing replica that *did* have the watcher
+([#54](https://github.com/doodlemania2/pocketbase/issues/54)). The console logs
+that would show exactly what happened were not retained. The evidence left on
+the volume and in the code fits one sequence, and every step of it is now
+closed:
+
+| Step | What happened | Fix |
+| --- | --- | --- |
+| Slow release | PocketBase's OTLP flush on SIGTERM had no deadline, so it took 30s against a slow collector, measured with a blackholed endpoint | Bounded to 5s (`otelShutdownTimeout` in `core/logger_otel.go`) |
+| Missed release | `flock -w` blocking on NFS re-polls with exponential backoff (…15s, 31s, 61s), so a release 31–60s in is never seen | Non-blocking `flock -n` every second |
+| Lock is not proof | The incoming replica then started *without* the lock and left it free, so the next claimant would have got it instantly while the previous writer was still running | The incoming replica needs the outgoing replica's explicit **ack**, not just the lock |
+| Zombie | Parked means health fails, and a failing **liveness** probe makes ACA *restart* the parked container after ~60–90s (the lock file's mtime moved at 16:24:17, a minute after the new replica started). The restart re-ran the entrypoint, found the lock free, and served | A replica listed in `.pb_released` parks on restart instead of serving. The serving replica also ignores handover requests from released replicas and from **older** azd revisions (the pod name carries the revision's deploy epoch) |
+
+Two cases still start without an ack, both with a WARN. The first is the one
+deploy that introduces the ack, because the outgoing replica runs the pre-#54
+entrypoint. It still releases when asked, but never acks, so the incoming
+replica holds the lock and waits out the full `PB_HANDOVER_TIMEOUT`. The second
+is a previous replica whose pod died outright. A **fresh volume** (no lock file
+yet) and a replica's **own container restarting** (it is `.pb_owner`) skip the
+ack wait, since no one else can be writing.
 
 What this looks like in the console on a healthy rollout:
 
 ```
-[entrypoint] waiting for the previous replica to release /pb_data (up to 60s)...  <- incoming
-[entrypoint] handover requested by 'ca-auth--azd-...-prb44' — releasing /pb_data. <- outgoing
-[entrypoint] handover: stopping pocketbase and releasing /pb_data...              <- outgoing
-[entrypoint] /pb_data released. Parking until this replica is drained.            <- outgoing
-[entrypoint] /pb_data is ours — single writer confirmed.                          <- incoming
+[entrypoint] waiting for the previous replica (ca-auth--azd-...-prb44) to release /pb_data (up to 60s)...  <- incoming
+[entrypoint] handover requested by 'ca-auth--azd-...-x7k2m' — releasing /pb_data.                         <- outgoing
+[entrypoint] handover: stopping pocketbase and releasing /pb_data...                                      <- outgoing
+[entrypoint] handover: /pb_data released to '...'. Parking until this replica is drained.                 <- outgoing
+[entrypoint] /pb_data is ours after 4s — single writer confirmed.                                         <- incoming
+[entrypoint] this replica already handed /pb_data over; parking instead of serving (...)                  <- outgoing, after a liveness restart
+```
+
+**Every handover event is durable.** The Container Apps environment keeps no
+console logs (Log Analytics was removed in #51/#52), so the entrypoint appends
+each event to `/pb_data/.pb_handover.log` (last 500 lines) and sends every WARN
+to the OTLP collector as a log record with `source=single-writer-handover`.
+That record reaches SigNoz with the same `service.name` as PocketBase's own
+logs, so alert on it there. To read the file:
+
+```sh
+script -q /dev/null az containerapp exec -g stfoa-auth -n ca-auth --command "tail -n 40 /pb_data/.pb_handover.log"
 ```
 
 **It fails open on purpose.** If the wait expires the incoming replica starts
-anyway, with a `WARN: no handover after Ns` line. That is what keeps the
-deadlock above from ever recurring: the deploy that first ships this mechanism
-faces an outgoing replica that has no watcher and can never answer, and every
-later rollout would inherit the same trap if a timeout were fatal. A brief
-overlap is recoverable; a container app that can no longer be deployed is not.
-**A repeat of that WARN outside the introducing deploy means two writers are
-sharing the volume** — treat it as the corruption alarm it is.
+anyway, with a WARN. That is what keeps the deadlock above from ever recurring.
+A brief overlap is recoverable; a container app that can no longer be deployed
+is not. **`no handover after Ns — the lock is still held` means two writers
+shared the volume**, so treat it as the corruption alarm it is. `never
+acknowledged` is expected exactly once, on the deploy that introduces the ack.
+Any later occurrence needs a look.
 
 `PB_HANDOVER_TIMEOUT` (default 60 s) bounds the wait; the normal wait is a poll
 interval plus a graceful drain, a few seconds. `PB_HANDOVER_TIMEOUT=0` disables
 the mechanism entirely and should only ever be used for a single-node local run.
 The startup probe allows 140 s, so even the full timeout leaves room to bind a
-port. CI covers it: [.github/workflows/test.yml](.github/workflows/test.yml)
-starts two containers on one Docker volume and asserts the first exits and the
-second takes over.
+port.
+
+**Tests.** [scripts/test_entrypoint_handover.sh](scripts/test_entrypoint_handover.sh)
+drives the entrypoint against a shared directory with a fake `pocketbase` and
+fails on any moment where two servers run at once. It covers a normal handover,
+a 35s release, the pre-#54 → #54 transition, a zombie restart, and an owner
+restart. Run it locally with `brew install flock dash`.
+[.github/workflows/test.yml](.github/workflows/test.yml) runs it under busybox
+in `alpine:3` (prod's shell), including the transition from whatever
+`deploy/azure` currently deploys. It also runs the real image as two containers
+on one Docker volume, asserting that the outgoing replica parks and that a
+`docker restart` of it (the liveness case) parks again rather than serving.
 
 ## Failure modes & fixes
 
@@ -341,7 +383,8 @@ second takes over.
 | Pass 1 fails with 403 on `listKeys` of LAW | Principal lacks reader/sharedKeys on `<law-name>` | Grant `Log Analytics Contributor` (or just `*/sharedKeys/action`) in `<shared-obs-rg>` |
 | App returns 502 briefly after deploy | New revision still starting, possibly waiting on the handover | Expected; startup probe allows up to 140 s |
 | `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — a deploy ran two replicas over one NFS volume | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb). The handover in `entrypoint.sh` prevents new occurrences |
-| `WARN: no handover after 60s` on a rollout | The outgoing replica never answered, so this one started without the lock | Expected exactly once, on the deploy that introduced the mechanism. Any repeat means two writers shared `/pb_data` — check `auxiliary.db` and read [#35](https://github.com/doodlemania2/pocketbase/issues/35) |
+| `WARN: no handover after 60s — the lock is still held` on a rollout | The outgoing replica never let go, so this one started without the lock | Two writers shared `/pb_data`. Check `auxiliary.db` and read [#35](https://github.com/doodlemania2/pocketbase/issues/35) / [#54](https://github.com/doodlemania2/pocketbase/issues/54) |
+| `WARN: lock held, but the previous replica ... never acknowledged` | The outgoing replica released without acking, or its pod died | Expected once, on the deploy that introduced the ack (#54). Otherwise check `/pb_data/.pb_handover.log` for the outgoing side |
 | Container crashloops with `SQLITE_BUSY (5)` | `/pb_data` mounted over SMB instead of NFS | SMB lacks POSIX byte-range locks. Storage must be Premium FileStorage + NFS, env VNet-integrated (`6a4f04df`) |
 | `customDomains` value rejected | Cert resource was deleted out-of-band | Set `CUSTOM_DOMAIN=` (empty) and re-deploy, then redo passes 2–3 |
 | Two replicas running (data corruption risk) | Someone bumped `maxReplicas` | Revert — SQLite is single-writer; `maxReplicas: 1` is enforced in [infra/modules/container-app.bicep](infra/modules/container-app.bicep) |
