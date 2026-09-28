@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
@@ -89,11 +90,12 @@ type BaseApp struct {
 	auxNonconcurrentDB  dbx.Builder
 
 	// app event hooks
-	onBootstrap     *hook.Hook[*BootstrapEvent]
-	onServe         *hook.Hook[*ServeEvent]
-	onTerminate     *hook.Hook[*TerminateEvent]
-	onBackupCreate  *hook.Hook[*BackupEvent]
-	onBackupRestore *hook.Hook[*BackupEvent]
+	onBootstrap      *hook.Hook[*BootstrapEvent]
+	onBootstrapClear *hook.Hook[*BootstrapEvent]
+	onServe          *hook.Hook[*ServeEvent]
+	onTerminate      *hook.Hook[*TerminateEvent]
+	onBackupCreate   *hook.Hook[*BackupEvent]
+	onBackupRestore  *hook.Hook[*BackupEvent]
 
 	// db model hooks
 	onModelValidate           *hook.Hook[*ModelEvent]
@@ -251,6 +253,7 @@ func NewBaseApp(config BaseAppConfig) *BaseApp {
 func (app *BaseApp) initHooks() {
 	// app event hooks
 	app.onBootstrap = &hook.Hook[*BootstrapEvent]{}
+	app.onBootstrapClear = &hook.Hook[*BootstrapEvent]{}
 	app.onServe = &hook.Hook[*ServeEvent]{}
 	app.onTerminate = &hook.Hook[*TerminateEvent]{}
 	app.onBackupCreate = &hook.Hook[*BackupEvent]{}
@@ -409,14 +412,14 @@ func (app *BaseApp) IsBootstrapped() bool {
 // Bootstrap initializes the application
 // (aka. create data dir, open db connections, load settings, etc.).
 //
-// It will call ResetBootstrapState() if the application was already bootstrapped.
+// It calls ClearBootstrap() if the application was already bootstrapped.
 func (app *BaseApp) Bootstrap() error {
 	event := &BootstrapEvent{}
 	event.App = app
 
 	err := app.OnBootstrap().Trigger(event, func(e *BootstrapEvent) error {
-		// clear resources of previous core state (if any)
-		if err := app.ResetBootstrapState(); err != nil {
+		// clear previous bootstrap state (if any)
+		if err := app.ClearBootstrap(); err != nil {
 			return err
 		}
 
@@ -464,41 +467,55 @@ func (app *BaseApp) Bootstrap() error {
 	return err
 }
 
-type closer interface {
-	Close() error
+// Deprecated: use [ClearBootstrap].
+func (app *BaseApp) ResetBootstrapState() error {
+	return app.ClearBootstrap()
 }
 
-// ResetBootstrapState releases the initialized core app resources
+// ClearBootstrap releases the initialized core app resources
 // (closing db connections, stopping cron ticker, etc.).
-func (app *BaseApp) ResetBootstrapState() error {
-	app.Cron().Stop()
-
-	var errs []error
-
-	dbs := []*dbx.Builder{
-		&app.concurrentDB,
-		&app.nonconcurrentDB,
-		&app.auxConcurrentDB,
-		&app.auxNonconcurrentDB,
+//
+// This method is no-op if the application is not bootstrapped yet.
+func (app *BaseApp) ClearBootstrap() error {
+	if !app.IsBootstrapped() {
+		return nil
 	}
 
-	for _, db := range dbs {
-		if db == nil {
-			continue
+	event := &BootstrapEvent{}
+	event.App = app
+
+	return app.OnBootstrapClear().Trigger(event, func(e *BootstrapEvent) error {
+		type closer interface {
+			Close() error
 		}
-		if v, ok := (*db).(closer); ok {
-			if err := v.Close(); err != nil {
-				errs = append(errs, err)
+
+		var errs []error
+
+		dbs := []*dbx.Builder{
+			&app.concurrentDB,
+			&app.nonconcurrentDB,
+			&app.auxConcurrentDB,
+			&app.auxNonconcurrentDB,
+		}
+
+		for _, db := range dbs {
+			if db == nil {
+				continue
 			}
+			if v, ok := (*db).(closer); ok {
+				if err := v.Close(); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			*db = nil
 		}
-		*db = nil
-	}
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
+		if len(errs) > 0 {
+			return errors.Join(errs...)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 // DB returns the default app data.db builder instance.
@@ -821,7 +838,7 @@ func (app *BaseApp) Restart() error {
 	event.IsRestart = true
 
 	return app.OnTerminate().Trigger(event, func(e *TerminateEvent) error {
-		_ = e.App.ResetBootstrapState()
+		_ = e.App.ClearBootstrap()
 
 		// attempt to restart the bootstrap process in case execve returns an error for some reason
 		defer func() {
@@ -862,6 +879,10 @@ func (app *BaseApp) RunAllMigrations() error {
 
 func (app *BaseApp) OnBootstrap() *hook.Hook[*BootstrapEvent] {
 	return app.onBootstrap
+}
+
+func (app *BaseApp) OnBootstrapClear() *hook.Hook[*BootstrapEvent] {
+	return app.onBootstrapClear
 }
 
 func (app *BaseApp) OnServe() *hook.Hook[*ServeEvent] {
@@ -1424,7 +1445,15 @@ func (app *BaseApp) registerBaseHooks() {
 		Id: "__pbCronStart__",
 		Func: func(e *ServeEvent) error {
 			app.Cron().Start()
+			return e.Next()
+		},
+		Priority: 999,
+	})
 
+	app.OnBootstrapClear().Bind(&hook.Handler[*BootstrapEvent]{
+		Id: "__pbCronStop__",
+		Func: func(e *BootstrapEvent) error {
+			app.Cron().Stop()
 			return e.Next()
 		},
 		Priority: 999,
@@ -1482,15 +1511,57 @@ func getLoggerMinLevel(app App) slog.Level {
 }
 
 func (app *BaseApp) initLogger() error {
+	var stopped atomic.Bool
+
 	duration := 3 * time.Second
 	ticker := time.NewTicker(duration)
-	done := make(chan bool, 1)
+
+	done := make(chan struct{}, 1)
 
 	// fork-local: assigned below, before the flush goroutine starts, and
-	// captured by WriteFunc so that a local sink rejecting writes is reported
+	// captured by runLogsWrite so that a local sink rejecting writes is reported
 	// on the independent OTLP sink instead of only to stderr.
 	// Nil (a no-op) whenever no collector is configured — see core/logger_otel.go
 	var sinkReporter *otelSinkReporter
+
+	runLogsWrite := func(logs []*logger.Log) {
+		if !app.IsBootstrapped() || app.Settings().Logs.MaxDays == 0 {
+			return
+		}
+
+		// fork-local: the per-row failure below is swallowed by design, so
+		// tally it and hand the aggregate to the OTLP sink afterwards.
+		var failedRecords int
+		var lastErr error
+
+		// write the accumulated logs
+		//
+		// note: based on several local tests there is no
+		// significant performance difference between small number
+		// of separate write queries vs 1 big INSERT
+		app.AuxRunInTransaction(func(txApp App) error {
+			model := &Log{}
+			for _, l := range logs {
+				model.MarkAsNew()
+				model.Id = GenerateDefaultRandomId()
+				model.Level = int(l.Level)
+				model.Message = l.Message
+				model.Data = l.Data
+				model.Created, _ = types.ParseDateTime(l.Time)
+
+				if err := txApp.AuxSave(model); err != nil {
+					log.Println("Failed to write log", model, err)
+					failedRecords++
+					lastErr = err
+				}
+			}
+
+			return nil
+		})
+
+		// fork-local: see core/logger_otel.go
+		sinkReporter.report(failedRecords, len(logs), lastErr)
+	}
 
 	handler := logger.NewBatchHandler(logger.BatchOptions{
 		Level:     getLoggerMinLevel(app),
@@ -1505,44 +1576,24 @@ func (app *BaseApp) initLogger() error {
 				}
 			}
 
-			ticker.Reset(duration)
+			if !stopped.Load() {
+				ticker.Reset(duration)
+			}
 
 			return app.Settings().Logs.MaxDays > 0
 		},
 		WriteFunc: func(ctx context.Context, logs []*logger.Log) error {
-			if !app.IsBootstrapped() || app.Settings().Logs.MaxDays == 0 {
-				return nil
+			// don't block and wait for the write transaction to complete
+			// when we can't be sure if the logs write wasn't triggered while
+			// inside another AUX db transaction (ticker or batch threshold reached)
+			// which can block indefinitely and cause deadlock
+			// (https://github.com/pocketbase/pocketbase/issues/7836)
+			shouldBlock, _ := ctx.Value(logger.BlockKey).(bool)
+			if shouldBlock {
+				runLogsWrite(logs)
+			} else {
+				routine.FireAndForget(func() { runLogsWrite(logs) })
 			}
-
-			// fork-local: the per-row failure below is swallowed by design, so
-			// tally it and hand the aggregate to the OTLP sink afterwards.
-			var failedRecords int
-			var lastErr error
-
-			// write the accumulated logs
-			// (note: based on several local tests there is no significant performance difference between small number of separate write queries vs 1 big INSERT)
-			app.AuxRunInTransaction(func(txApp App) error {
-				model := &Log{}
-				for _, l := range logs {
-					model.MarkAsNew()
-					model.Id = GenerateDefaultRandomId()
-					model.Level = int(l.Level)
-					model.Message = l.Message
-					model.Data = l.Data
-					model.Created, _ = types.ParseDateTime(l.Time)
-
-					if err := txApp.AuxSave(model); err != nil {
-						log.Println("Failed to write log", model, err)
-						failedRecords++
-						lastErr = err
-					}
-				}
-
-				return nil
-			})
-
-			// fork-local: see core/logger_otel.go
-			sinkReporter.report(failedRecords, len(logs), lastErr)
 
 			return nil
 		},
@@ -1569,17 +1620,21 @@ func (app *BaseApp) initLogger() error {
 		}
 	})
 
-	// write all remaining logs before ticker.Stop to avoid races with ResetBootstrap user calls
-	app.OnTerminate().Bind(&hook.Handler[*TerminateEvent]{
-		Id: "__pbAppLoggerOnTerminate__",
-		Func: func(e *TerminateEvent) error {
-			handler.WriteAll(context.Background())
+	// attempt to write all queued logs before clearing the application bootstrap state
+	app.OnBootstrapClear().Bind(&hook.Handler[*BootstrapEvent]{
+		Id: "__pbAppLoggerFlushBeforeStop__",
+		Func: func(e *BootstrapEvent) error {
+			// extra precaution in case the hook was manually triggered while inside aux db transaction
+			_, isTx := e.App.AuxNonconcurrentDB().(*dbx.Tx)
+			ctx := context.WithValue(context.Background(), logger.BlockKey, !isTx)
+			handler.WriteAll(ctx)
 
+			stopped.Store(true)
 			ticker.Stop()
 
-			// don't block in case OnTerminate is triggered more than once
+			// don't block in case the hook is triggered more than once
 			select {
-			case done <- true:
+			case done <- struct{}{}:
 			default:
 			}
 
@@ -1598,7 +1653,9 @@ func (app *BaseApp) initLogger() error {
 			}
 
 			if e.App.Logger() != nil {
-				if h, ok := e.App.Logger().Handler().(*logger.BatchHandler); ok {
+				// fork-local: an interface rather than *logger.BatchHandler, so the
+				// level also reaches the local sink through the OTLP fanoutHandler (#53)
+				if h, ok := e.App.Logger().Handler().(levelSetter); ok {
 					h.SetLevel(getLoggerMinLevel(e.App))
 				}
 			}

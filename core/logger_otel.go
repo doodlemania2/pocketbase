@@ -257,6 +257,21 @@ func (h *fanoutHandler) Handle(ctx context.Context, record slog.Record) error {
 	return firstErr
 }
 
+// SetLevel forwards a settings-driven level change to the local sink, which is
+// what initLogger's OnSettingsReload hook means to adjust. The OTLP minLevel is
+// env-driven (PB_OTEL_MIN_LEVEL) and deliberately left alone.
+func (h *fanoutHandler) SetLevel(level slog.Level) {
+	if l, ok := h.local.(levelSetter); ok {
+		l.SetLevel(level)
+	}
+}
+
+// levelSetter is the part of *logger.BatchHandler the reload hook relies on,
+// so that the hook also reaches the local sink through a fanoutHandler.
+type levelSetter interface {
+	SetLevel(level slog.Level)
+}
+
 func (h *fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &fanoutHandler{
 		local:    h.local.WithAttrs(attrs),
