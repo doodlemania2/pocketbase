@@ -67,6 +67,15 @@ const (
 	// from the health probe alone — so the report is rate limited and carries
 	// the accumulated counts rather than one record per dropped row.
 	otelSinkReportInterval = 5 * time.Minute
+
+	// otelShutdownTimeout bounds the final OTLP flush on termination.
+	//
+	// The single-writer handover in entrypoint.sh (#35, #54) waits for this
+	// process to exit before the incoming replica may open /pb_data, so an
+	// unbounded flush against a slow or unreachable collector (measured: 30s)
+	// stretches the handover past the incoming replica's timeout. Losing the
+	// last batch of telemetry is the right trade against two writers.
+	otelShutdownTimeout = 5 * time.Second
 )
 
 // hasOTLPDestination reports whether an OTLP collector is configured.
@@ -197,7 +206,10 @@ func (app *BaseApp) initOTelLogger(local slog.Handler) (slog.Handler, *otelSinkR
 		Func: func(e *TerminateEvent) error {
 			// Flush before the process goes away, otherwise the last batch —
 			// often the one explaining the shutdown — is lost.
-			if err := provider.Shutdown(context.Background()); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
+			defer cancel()
+
+			if err := provider.Shutdown(ctx); err != nil {
 				fmt.Fprintf(os.Stderr, "[otel] shutdown: %v\n", err)
 			}
 
