@@ -1,6 +1,14 @@
 # Azure Deployment Runbook
 
-End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with PocketBase's native scheduled backups, shared cross-RG observability (Log Analytics + Application Insights), and a custom domain.
+End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with PocketBase's native scheduled backups, telemetry exported to the self-hosted **SigNoz** collector over OTLP, and a custom domain.
+
+> **Logging is SigNoz-only.** Azure Log Analytics and Application Insights were
+> retired in [#51](https://github.com/doodlemania2/pocketbase/issues/51) /
+> [#52](https://github.com/doodlemania2/pocketbase/issues/52): the Container Apps
+> environment ships `appLogsConfiguration.destination: null`, the template holds no
+> cross-RG `existing` reference, and the `SHARED_OBS_RG` / `SHARED_LAW_NAME` /
+> `SHARED_AI_NAME` variables are gone. Do not reintroduce either service — see
+> [Telemetry — OTLP export to SigNoz](#telemetry--otlp-export-to-signoz).
 
 > **Litestream is disabled and has been since 2026-05-25.** The binary is still
 > baked into the image and `litestream.yml` still ships, but no `LITESTREAM_*`
@@ -18,11 +26,13 @@ End-to-end deployment of this PocketBase fork to **Azure Container Apps**, with 
 | Resource group | `<rg-name>` (default `rg-<envName>`) | — | Created by deployment |
 | ACR | `cr<resourceToken>` (Basic) | `<rg-name>` | Holds `pocketbase:latest` |
 | Storage account | `<storage-account>` | `<rg-name>` | Premium **FileStorage**, NFS share `pbdata`. No blob endpoint — this kind cannot host one |
-| Container Apps env | `cae-<envName>` | `<rg-name>` | Consumption profile, logs → shared LAW |
+| Container Apps env | `cae-<envName>` | `<rg-name>` | Consumption profile, no console-log destination (`appLogsConfiguration.destination: null`) |
 | Container App | `ca-<envName>` | `<rg-name>` | 1 vCPU / 2 GiB, **single replica** (SQLite) |
 | Managed identity | `id-<envName>` | `<rg-name>` | AcrPull |
-| Log Analytics (shared) | `<law-name>` | `<shared-obs-rg>` | Cross-RG `existing` reference |
-| App Insights (shared) | `<app-insights-name>` | `<shared-obs-rg>` | Cross-RG `existing` reference |
+
+Everything the deployment touches lives in one resource group. There is no
+observability resource and no cross-RG dependency: logs leave the process over
+OTLP to SigNoz, which runs on the parish K3s cluster, not in Azure.
 
 PocketBase data path **inside the container**: `/pb_data`, an **NFS** Azure Files
 mount that persists across pod restarts and across PocketBase's own
@@ -36,17 +46,13 @@ only supports NFS Azure Files under those conditions.
 
 1. `az login` and `azd auth login`.
 2. The signed-in principal needs:
-   - `Contributor` on the subscription (or on `<rg-name>` after first create).
-   - `Reader` + `Microsoft.OperationalInsights/workspaces/sharedKeys/action` on `<law-name>` in `<shared-obs-rg>` (the deployment calls `listKeys()` on it).
+   - `Contributor` on the subscription (or on `<rg-name>` after first create). That is the only role the deployment needs — nothing outside `<rg-name>` is touched.
 3. Set required azd env vars (all values stay in the gitignored `.azure/<envName>/.env`):
    ```sh
    azd env new <envname>           # e.g. prod
    azd env set AZURE_LOCATION       <region>           # e.g. westus
    azd env set PB_ADMIN_EMAIL       you@example.com
    azd env set PB_ADMIN_PASSWORD    '<strong-pass>'    # quote to survive zsh
-   azd env set SHARED_OBS_RG        <shared-obs-rg>
-   azd env set SHARED_LAW_NAME      <law-name>
-   azd env set SHARED_AI_NAME       <app-insights-name>
    azd env set AZURE_STORAGE_NAME   <storage-account>  # 3-24 chars, lowercase alphanumeric
    # Optional — defaults to rg-<envName> if unset:
    azd env set AZURE_RG_NAME        <rg-name>
@@ -135,17 +141,32 @@ azd provision
 The entrypoint runs `pocketbase superuser upsert` on next start.
 
 ### View logs
-Either:
+
+**Live, from the running replica** — this is the only way to see console output
+from Azure:
 ```sh
 az containerapp logs show -n ca-<envName> -g <rg-name> --follow
 ```
-Or in the shared LAW (logs flow there via `appLogsConfiguration`):
-```kusto
-ContainerAppConsoleLogs_CL
-| where ContainerAppName_s == "ca-<envName>"
-| order by TimeGenerated desc
-| take 200
-```
+Log streaming reads from the replica itself, so it works even though the
+environment stores nothing
+([log streaming](https://learn.microsoft.com/azure/container-apps/log-streaming)).
+
+**Retained history** lives in SigNoz, not Azure. The environment is configured
+with no logs destination, so there is no `ContainerAppConsoleLogs_CL` table, no
+KQL to run, and the portal's **Logs** query editor is disabled for this
+environment ([log options](https://learn.microsoft.com/azure/container-apps/log-options)).
+Query `service.name=stfoa-auth` in SigNoz instead — see
+[Telemetry — OTLP export to SigNoz](#telemetry--otlp-export-to-signoz).
+
+Two consequences worth knowing before you go looking:
+
+- Anything written to stdout/stderr that is **not** a PocketBase log record —
+  `entrypoint.sh` output, crash output, the Go runtime's panic trace — is
+  retained nowhere once the replica is gone. That is why the handover writes to
+  `/pb_data/.pb_handover.log` and mirrors WARNs through the OTLP sink.
+- A container that dies before PocketBase's logger starts leaves no trace in
+  SigNoz. Catch that case with `az containerapp revision list` /
+  `az containerapp replica list` plus the stream above, while it is still alive.
 
 ## Backups & disaster recovery
 
@@ -380,7 +401,7 @@ on one Docker volume, asserting that the outgoing replica parks and that a
 | Symptom | Cause | Fix |
 |---|---|---|
 | Pass 3 fails with `Domain ownership verification failed` | DNS records not propagated yet | Re-check `dig`, wait, re-run `azd up` |
-| Pass 1 fails with 403 on `listKeys` of LAW | Principal lacks reader/sharedKeys on `<law-name>` | Grant `Log Analytics Contributor` (or just `*/sharedKeys/action`) in `<shared-obs-rg>` |
+| `ResourceNotFound` on a Log Analytics workspace or App Insights component during provision | Someone reintroduced the retired cross-RG observability reference | Remove it. Logging is SigNoz-only; see [#50](https://github.com/doodlemania2/pocketbase/issues/50) for the outage this caused |
 | App returns 502 briefly after deploy | New revision still starting, possibly waiting on the handover | Expected; startup probe allows up to 140 s |
 | `database disk image is malformed (11)` spam in logs | `auxiliary.db` corrupt — a deploy ran two replicas over one NFS volume | See [Recovering a corrupt `auxiliary.db`](#recovering-a-corrupt-auxiliarydb). The handover in `entrypoint.sh` prevents new occurrences |
 | `WARN: no handover after 60s — the lock is still held` on a rollout | The outgoing replica never let go, so this one started without the lock | Two writers shared `/pb_data`. Check `auxiliary.db` and read [#35](https://github.com/doodlemania2/pocketbase/issues/35) / [#54](https://github.com/doodlemania2/pocketbase/issues/54) |
